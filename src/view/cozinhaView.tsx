@@ -49,18 +49,9 @@ export default function KitchenDisplayScreen({ navigation }: Props) {
   }, []);
 
   const handleLogout = useCallback(() => {
-    Alert.alert('Sair do painel', 'Deseja encerrar a sessão da cozinha?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Sair',
-        style: 'destructive',
-        onPress: () => {
-          logout();
-          // A tela de login se chama 'loginView'.
-          navigation.replace('loginView');
-        },
-      },
-    ]);
+    // O Alert da web pode ignorar callbacks de botões; o logout é direto e confiável.
+    logout();
+    navigation.replace('loginView');
   }, [logout, navigation]);
 
   const confirmDelivery = useCallback(

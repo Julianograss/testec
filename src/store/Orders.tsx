@@ -36,6 +36,8 @@ export type Order = {
   startedAt: number | null;
   readyAt: number | null;
   closedAt: number | null;
+  paymentStatus?: 'Pago' | 'Pendente' | 'Estornado';
+  paidAt?: number | null;
   ownerId?: number;
   ownerEmail?: string;
 };
@@ -95,6 +97,8 @@ const normalize = (raw: any): Order => ({
   startedAt: null,
   readyAt: null,
   closedAt: null,
+  paymentStatus: 'Pendente',
+  paidAt: null,
   ...raw,
 });
 
@@ -139,6 +143,20 @@ void MockDatabase.get('orders').then(savedOrders => {
     listeners.forEach(listener => listener());
   }
 });
+
+// Sincroniza as telas abertas em abas diferentes do mesmo navegador.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', event => {
+    if (event.key !== 'fogo-fumaca-mock-database-v1') return;
+    void MockDatabase.get('orders').then(savedOrders => {
+      if (Array.isArray(savedOrders)) {
+        state = savedOrders.map(normalize);
+        snapshot = state.map(decorate);
+        listeners.forEach(listener => listener());
+      }
+    });
+  });
+}
 
 /* ==========================================
    AÇÕES (podem ser chamadas de qualquer lugar)

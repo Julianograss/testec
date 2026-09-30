@@ -1,6 +1,9 @@
 {
+  "buildCommand": "npm run build:web",
+  "outputDirectory": "dist",
+  "installCommand": "npm install",
   "rewrites": [
-    { "source": "/mesa/:tableNumber", "destination": "/" },
+    { "source": "/mesa/:tableNumber", "destination": "/index.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

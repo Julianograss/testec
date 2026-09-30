@@ -16,6 +16,7 @@ export const periodRange = (period: ReportPeriod, now = Date.now()): PeriodRange
   }
 };
 const inRange = (order: OrderView, start: number, end: number) => order.createdAt >= start && order.createdAt <= end;
+const isPaid = (order: OrderView) => order.paymentStatus === 'Pago' || order.status === 'Entregue';
 const percent = (part: number, total: number) => total > 0 ? `${Math.round((part / total) * 100)}%` : '0%';
 const aggregateProducts = (orders: OrderView[]) => {
   const map = new Map<string, { nome: string; qtd: number; receita: number }>();
@@ -27,7 +28,7 @@ export function useDashboard() {
   const { orders } = useOrders();
   return useMemo(() => {
     const today = startOfDay(Date.now()); const yesterday = today - DAY;
-    const concluded = orders.filter(order => order.status === 'Entregue');
+    const concluded = orders.filter(isPaid);
     const todayOrders = concluded.filter(order => order.createdAt >= today);
     const yesterdayOrders = concluded.filter(order => order.createdAt >= yesterday && order.createdAt < today);
     const sum = (list: OrderView[]) => list.reduce((total, order) => total + order.totalValue, 0);
@@ -36,7 +37,7 @@ export function useDashboard() {
     return {
       faturamento: `R$ ${formatMoney(todayRevenue)}`, crescimentoFaturamento: growth, pedidos: String(todayOrders.length), ticketMedio: `R$ ${formatMoney(todayOrders.length ? todayRevenue / todayOrders.length : 0)}`,
       produtosDestaque: aggregateProducts(todayOrders).slice(0, 3).map((item, index) => ({ id: `${index}-${item.nome}`, nome: item.nome, vendas: item.qtd, valor: `R$ ${formatMoney(item.receita)}` })),
-      pedidosRecentes: [...orders].sort((a, b) => b.createdAt - a.createdAt).slice(0, 3).map(order => ({ id: `#${order.id}`, mesa: order.table ? `Mesa ${order.table}` : order.type, valor: `R$ ${order.total}`, status: order.status, time: order.time })),
+      pedidosRecentes: [...orders].sort((a, b) => b.createdAt - a.createdAt).slice(0, 3).map(order => ({ id: `#${order.id}`, mesa: order.table ? `Mesa ${order.table}` : order.type, valor: `R$ ${order.total}`, status: `${order.status} • ${order.paymentStatus || 'Pendente'}`, time: order.time })),
     };
   }, [orders]);
 }
@@ -45,7 +46,7 @@ export function useReports(period: ReportPeriod) {
   const { orders } = useOrders(); const { products } = useCatalog();
   return useMemo(() => {
     const { start, end } = periodRange(period); const windowOrders = orders.filter(order => inRange(order, start, end));
-    const concluded = windowOrders.filter(order => order.status === 'Entregue'); const canceled = windowOrders.filter(order => order.status === 'Cancelado');
+    const concluded = windowOrders.filter(isPaid); const canceled = windowOrders.filter(order => order.status === 'Cancelado');
     const revenue = concluded.reduce((total, order) => total + order.totalValue, 0); const ranking = aggregateProducts(concluded); const best = ranking.slice(0, 2);
     const unsold = products.filter(product => product.active && !ranking.some(item => item.nome === product.name)).map(product => ({ nome: product.name, qtd: 0, receita: 0 }));
     const worst = unsold[0] || ranking[ranking.length - 1]; const topRevenue = ranking[0]?.receita || 1;

@@ -9,6 +9,7 @@ import {
   Dimensions,
   Easing,
   StatusBar,
+  ScrollView,
 } from 'react-native';
 import {
   X,
@@ -22,7 +23,8 @@ import {
 
 // Obtém a largura da tela para calcular a largura do menu (ex: 75% da tela)
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const MENU_WIDTH = SCREEN_WIDTH * 0.75; // Menu ocupará 75% da largura da tela
+// No celular, o menu não pode ocupar a tela inteira nem crescer além de uma largura confortável.
+const MENU_WIDTH = Math.min(SCREEN_WIDTH * 0.82, 320);
 
 interface SideMenuProps {
   open: boolean;
@@ -99,6 +101,7 @@ export function SideMenu({
             </Pressable>
           </View>
 
+          <ScrollView style={styles.menuScroll} contentContainerStyle={styles.menuScrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.userSection}>
             {user ? (
               <View>
@@ -151,6 +154,7 @@ export function SideMenu({
               <Text style={styles.signOutText}>Sair da conta</Text>
             </Pressable>
           )}
+          </ScrollView>
         </SafeAreaView>
       </Animated.View>
     </View>
@@ -205,6 +209,13 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#f4f4f5',
+  },
+  menuScroll: {
+    flex: 1,
+  },
+  menuScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 18,
   },
   title: {
     fontSize: 20,

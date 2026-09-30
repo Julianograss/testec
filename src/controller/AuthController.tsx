@@ -16,18 +16,38 @@ const defaultAccounts: Record<string, AuthUser> = {
   'joao@gmail.com': { id: 2, name: 'João', role: 'ATTENDANT', email: 'joao@gmail.com' },
   'augusto@gmail.com': { id: 3, name: 'Augusto', role: 'KITCHEN', email: 'augusto@gmail.com' },
   'admin@gmail.com': { id: 4, name: 'Admin', role: 'ADMIN', email: 'admin@gmail.com' },
+  'juliano.admin': { id: 4, name: 'Juliano Grass', role: 'ADMIN', email: 'juliano.admin' },
+  'juliano.admin@gmail.com': { id: 4, name: 'Juliano Grass', role: 'ADMIN', email: 'juliano.admin@gmail.com' },
 };
+
+export function normalizeUserRole(value: unknown): UserRole {
+  const role = String(value || '').trim().toUpperCase();
+  if (role === 'ADMIN' || role.includes('ADMINISTRADOR') || role.includes('GERENTE') || role.includes('CAIXA')) return 'ADMIN';
+  if (role === 'ATTENDANT' || role.includes('ATEND') || role.includes('GARÇOM') || role.includes('GARCON')) return 'ATTENDANT';
+  if (role === 'KITCHEN' || role.includes('COZIN')) return 'KITCHEN';
+  return 'CLIENT';
+}
+
+function roleForIdentifier(email: string, fallback: unknown): UserRole {
+  const normalized = email.trim().toLowerCase();
+  if (normalized === 'admin@gmail.com' || normalized === 'juliano.admin' || normalized === 'juliano.admin@gmail.com') return 'ADMIN';
+  if (normalized === 'joao@gmail.com') return 'ATTENDANT';
+  if (normalized === 'augusto@gmail.com') return 'KITCHEN';
+  return normalizeUserRole(fallback);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { const saved = readJson(SESSION_KEY, null); if (saved?.id) setUser(saved); setLoading(false); }, []);
+  useEffect(() => { const saved = readJson(SESSION_KEY, null); if (saved?.id) setUser({ ...saved, role: roleForIdentifier(saved.email || '', saved.role) }); setLoading(false); }, []);
   const login = async (email: string, password: string): Promise<AuthUser> => new Promise((resolve, reject) => {
     setTimeout(() => {
       const profiles = readJson(PROFILE_KEY, {});
       const accounts = { ...defaultAccounts, ...profiles };
       const normalized = email.trim().toLowerCase();
-      const loggedUser = password === (readJson(PASSWORD_KEY, {})[normalized] || '123456') ? accounts[normalized] : undefined;
+      const storedPassword = readJson(PASSWORD_KEY, {})[normalized] || '123456';
+      const rawUser = accounts[normalized];
+      const loggedUser = password === storedPassword && rawUser ? { ...rawUser, role: roleForIdentifier(normalized, rawUser.role) } : undefined;
       if (!loggedUser) { reject(new Error('Credenciais inválidas. Tente usar as contas de demonstração.')); return; }
       setUser(loggedUser); writeJson(SESSION_KEY, loggedUser); resolve(loggedUser);
     }, 250);

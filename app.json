@@ -1,40 +1,19 @@
 {
   "expo": {
-    "name": "mobile_ReactNative",
-    "slug": "mobile_ReactNative",
+    "name": "Fogo & Fumaça",
+    "slug": "fogo-fumaca",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "ios": {
-      "supportsTablet": true,
-      "infoPlist": {
-        "NSCameraUsageDescription": "Este aplicativo precisa de acesso à câmera para ler códigos de barras e QR Codes."
-      }
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "permissions": [
-        "CAMERA"
-      ]
-    },
+    "newArchEnabled": true,
+    "scheme": "fogo-fumaca",
     "web": {
-      "favicon": "./assets/favicon.png"
+      "bundler": "metro",
+      "output": "single"
     },
     "plugins": [
-      "expo-status-bar",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/splash-icon.png",
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
-        }
-      ],
-      "expo-sharing"
+      "expo-camera",
+      "expo-image-picker"
     ]
   }
 }

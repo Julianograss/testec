@@ -138,17 +138,10 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
      AÇÕES
   ========================================== */
   const handleLogout = useCallback(() => {
-    Alert.alert('Encerrar turno', 'Deseja sair do modo operação?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Sair',
-        style: 'destructive',
-        onPress: () => {
-          logout();
-          navigation.replace('loginView');
-        },
-      },
-    ]);
+    // No Expo Web, os callbacks dos botões de Alert podem não ser executados.
+    // O botão Sair deve sempre limpar a sessão e retornar ao login.
+    logout();
+    navigation.replace('loginView');
   }, [logout, navigation]);
 
   const dispatchOrder = useCallback(
@@ -449,8 +442,8 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
                   </Text>
 
                   <View style={styles.orderFooter}>
-                    <View style={styles.orderStatusBadge}>
-                      <Text style={styles.orderStatusText}>{order.status}</Text>
+                    <View style={[styles.orderStatusBadge, order.status === 'Pronto' && styles.orderStatusReady]}>
+                      <Text style={[styles.orderStatusText, order.status === 'Pronto' && styles.orderStatusReadyText]}>{order.status === 'Pronto' ? 'Pronto pela cozinha' : order.status === 'Em preparo' ? 'Em preparo na cozinha' : order.status}</Text>
                     </View>
 
                     {order.status === 'Pronto' ? (
@@ -576,7 +569,9 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
   );
 }
 
-const isWide = Platform.OS === 'web' || Platform.isPad;
+// A webview de celular também é `web`; considerar somente tablets como largos
+// evita que o atendimento force colunas lado a lado em telas estreitas.
+const isWide = Platform.OS !== 'web' && Platform.isPad;
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
@@ -719,6 +714,8 @@ const styles = StyleSheet.create({
   orderFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   orderStatusBadge: { backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
   orderStatusText: { fontSize: 12, fontWeight: '600', color: COLORS.textMuted },
+  orderStatusReady: { backgroundColor: '#E8F5E9', borderColor: '#A5D6A7' },
+  orderStatusReadyText: { color: COLORS.statusOcupada, fontWeight: '800' },
   actionButton: { backgroundColor: COLORS.primary, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 6 },
   actionButtonText: { color: COLORS.white, fontSize: 13, fontWeight: 'bold' },
   linkButton: { paddingVertical: 10, paddingHorizontal: 8 },

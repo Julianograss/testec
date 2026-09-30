@@ -132,6 +132,8 @@ export default function CheckoutScreen({ route, navigation }) {
                     price: typeof item.price === 'number' ? item.price : Number(String(item.price).replace(',', '.')),
                   })),
                   payment: paymentMethod === 'cartao' ? 'Cartão' : paymentMethod === 'dinheiro' ? 'Dinheiro' : paymentMethod === 'caixa' ? 'Pagar no caixa' : 'Pix',
+                  paymentStatus: paymentMethod === 'pix' || paymentMethod === 'cartao' ? 'Pago' : 'Pendente',
+                  paidAt: paymentMethod === 'pix' || paymentMethod === 'cartao' ? Date.now() : null,
                 });
                 clearCart();
                 Alert.alert('Sucesso!', 'Seu pedido foi finalizado e enviado para o atendimento.');
