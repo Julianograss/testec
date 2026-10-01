@@ -1,32 +1,33 @@
 /**
  * src/store/Orders.tsx
  *
- * Fonte única de verdade dos pedidos — usada pela cozinha, pelo atendimento e pelo admin.
- * Funciona como o AuthController: concentra o estado e as regras num lugar só,
- * e as telas apenas consomem.
+ * Fonte única de verdade dos pedidos — agora lendo e gravando no Supabase.
+ * Cozinha, atendimento, admin e cliente consomem o MESMO estado, e o
+ * Realtime do Supabase atualiza todos os aparelhos quando algo muda.
  *
- * Diferença: aqui o estado vive fora do React (padrão "external store"), para que
- * funções como `updateOrderStatus` possam ser chamadas de qualquer lugar,
- * inclusive fora de um componente.
- *
- * Para plugar a API: troque `loadOrders()` por um fetch e chame `setOrders(...)`.
+ * A interface pública é a mesma de antes (useOrders, useKitchenOrders,
+ * addOrder, advanceOrder…), então as telas quase não mudam.
  */
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import { ORDERS } from '../data/demoData';
-import MockDatabase from '../data/mockDatabase';
+import { Alert } from '../utils/alert';
+import { supabase, newUuid } from '../services/supabase';
+import { onTablesChange } from '../services/realtime';
 
 /* ==========================================
    TIPOS
 ========================================== */
 export type OrderStatus = 'Recebido' | 'Em preparo' | 'Pronto' | 'Entregue' | 'Cancelado';
 export type OrderType = 'Local' | 'Delivery' | 'Retirada';
-
 export type OrderItem = { name: string; qty: number; price: number };
 
 export type Order = {
+  /** Número exibido nas telas (orders.number). */
   id: string;
+  /** uuid real da linha em orders. */
+  uuid: string;
   type: OrderType;
   customer: string;
+  /** Número da mesa (tables.number) como texto. */
   table: string | null;
   attendant: string | null;
   payment: string;
@@ -38,11 +39,11 @@ export type Order = {
   closedAt: number | null;
   paymentStatus?: 'Pago' | 'Pendente' | 'Estornado';
   paidAt?: number | null;
-  ownerId?: number;
-  ownerEmail?: string;
+  notes?: string;
+  /** profiles.id do cliente dono do pedido. */
+  ownerId?: string;
 };
 
-/** Pedido com os campos prontos para exibição (itens em texto, total e hora formatados). */
 export type OrderView = Order & {
   items: string;
   total: string;
@@ -52,7 +53,6 @@ export type OrderView = Order & {
 
 export const ORDER_FLOW: OrderStatus[] = ['Recebido', 'Em preparo', 'Pronto', 'Entregue'];
 
-/** Tradução do status para as colunas do painel da cozinha. */
 export const KITCHEN_COLUMNS = {
   queue: 'Recebido' as OrderStatus,
   preparing: 'Em preparo' as OrderStatus,
@@ -74,7 +74,6 @@ export const orderTotal = (order: Order) =>
 export const orderItemsLabel = (order: Order) =>
   order.itemList.map(item => `${item.qty}x ${item.name}`).join(', ');
 
-/** Minutos decorridos desde um instante (usado nos cronômetros da cozinha). */
 export const elapsedMinutes = (from: number, now: number = Date.now()) =>
   Math.max(0, Math.floor((now - from) / 60000));
 
@@ -85,9 +84,15 @@ export const formatElapsed = (from: number, now: number = Date.now()) => {
   return `${Math.floor(total / 60)}h ${String(total % 60).padStart(2, '0')}min`;
 };
 
+/** Pedido que ainda pesa na conta da mesa (não cancelado e não pago). */
+export const isUnpaid = (order: Order) =>
+  order.status !== 'Cancelado' && order.paymentStatus !== 'Pago';
+
 /* ==========================================
-   ESTADO
+   MAPEAMENTO BANCO <-> TELA
 ========================================== */
+const ts = (value: string | null | undefined) => (value ? Date.parse(value) : null);
+
 const normalize = (raw: any): Order => ({
   table: null,
   attendant: null,
@@ -99,8 +104,34 @@ const normalize = (raw: any): Order => ({
   closedAt: null,
   paymentStatus: 'Pendente',
   paidAt: null,
+  notes: '',
   ...raw,
 });
+
+const fromRow = (row: any): Order =>
+  normalize({
+    id: String(row.number ?? row.id.slice(0, 4)),
+    uuid: row.id,
+    type: row.type,
+    customer: row.customer_name || 'Balcão',
+    table: row.tables?.number != null ? String(row.tables.number) : null,
+    attendant: row.attendant_name || null,
+    payment: row.payment_method || 'Não informado',
+    status: row.status,
+    itemList: (row.order_items || []).map((item: any) => ({
+      name: item.name || 'Item',
+      qty: item.quantity,
+      price: Number(item.unit_price),
+    })),
+    createdAt: Date.parse(row.created_at),
+    startedAt: ts(row.started_at),
+    readyAt: ts(row.ready_at),
+    closedAt: ts(row.closed_at),
+    paymentStatus: row.payment_status || 'Pendente',
+    paidAt: ts(row.paid_at),
+    notes: row.notes || '',
+    ownerId: row.customer_id || undefined,
+  });
 
 const decorate = (order: Order): OrderView => {
   const totalValue = orderTotal(order);
@@ -113,54 +144,66 @@ const decorate = (order: Order): OrderView => {
   };
 };
 
-// Troque esta linha por uma chamada à API quando o back-end existir.
-const loadOrders = (): Order[] => ORDERS.map(normalize);
-
-let state: Order[] = loadOrders();
-let snapshot: OrderView[] = state.map(decorate);
+/* ==========================================
+   ESTADO (store externo)
+========================================== */
+let state: Order[] = [];
+let snapshot: OrderView[] = [];
 const listeners = new Set<() => void>();
 
 const commit = (next: Order[]) => {
   state = next;
   snapshot = state.map(decorate);
-  void MockDatabase.replace('orders', state);
   listeners.forEach(listener => listener());
 };
 
+const iso = (value: number | null) => (value ? new Date(value).toISOString() : null);
+
+export const reloadOrders = async () => {
+  const { data, error } = await supabase
+    .from('orders')
+    .select('*, order_items(*), tables(number)')
+    .order('created_at', { ascending: false })
+    .limit(1000);
+  if (error) {
+    console.warn('[Orders] falha ao carregar pedidos:', error.message);
+    return;
+  }
+  commit((data || []).map(fromRow).reverse());
+};
+
+let stopRealtime: (() => void) | null = null;
+let stopAuth: (() => void) | null = null;
+
+/** Liga o carregamento + tempo real quando a primeira tela assina; desliga quando a última sai. */
 export const subscribe = (listener: () => void) => {
   listeners.add(listener);
+  if (listeners.size === 1) {
+    void reloadOrders();
+    stopRealtime = onTablesChange(['orders', 'order_items'], () => void reloadOrders());
+    const { data } = supabase.auth.onAuthStateChange(() => {
+      setTimeout(() => void reloadOrders(), 0);
+    });
+    stopAuth = () => data.subscription.unsubscribe();
+  }
   return () => {
     listeners.delete(listener);
+    if (listeners.size === 0) {
+      stopRealtime?.();
+      stopAuth?.();
+      stopRealtime = stopAuth = null;
+    }
   };
 };
 
 export const getOrders = (): OrderView[] => snapshot;
 
-void MockDatabase.get('orders').then(savedOrders => {
-  if (Array.isArray(savedOrders) && savedOrders.length > 0) {
-    state = savedOrders.map(normalize);
-    snapshot = state.map(decorate);
-    listeners.forEach(listener => listener());
-  }
-});
-
-// Sincroniza as telas abertas em abas diferentes do mesmo navegador.
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', event => {
-    if (event.key !== 'fogo-fumaca-mock-database-v1') return;
-    void MockDatabase.get('orders').then(savedOrders => {
-      if (Array.isArray(savedOrders)) {
-        state = savedOrders.map(normalize);
-        snapshot = state.map(decorate);
-        listeners.forEach(listener => listener());
-      }
-    });
-  });
-}
-
 /* ==========================================
-   AÇÕES (podem ser chamadas de qualquer lugar)
+   AÇÕES
 ========================================== */
+const reportError = (action: string, message?: string) =>
+  Alert.alert('Não foi possível salvar', message || `Falha ao ${action}. Tente novamente.`);
+
 const stamp = (order: Order, status: OrderStatus): Order => {
   const now = Date.now();
   switch (status) {
@@ -179,7 +222,26 @@ const stamp = (order: Order, status: OrderStatus): Order => {
 };
 
 export const updateOrderStatus = (id: string, status: OrderStatus) => {
-  commit(state.map(order => (order.id === id ? stamp(order, status) : order)));
+  const current = state.find(order => order.id === id);
+  if (!current) return;
+  const next = stamp(current, status);
+  commit(state.map(order => (order.id === id ? next : order))); // otimista
+
+  void supabase
+    .from('orders')
+    .update({
+      status: next.status,
+      started_at: iso(next.startedAt),
+      ready_at: iso(next.readyAt),
+      closed_at: iso(next.closedAt),
+    })
+    .eq('id', current.uuid)
+    .then(({ error }) => {
+      if (error) {
+        reportError('atualizar o pedido', error.message);
+        void reloadOrders();
+      }
+    });
 };
 
 export const advanceOrder = (id: string) => {
@@ -199,27 +261,110 @@ export const revertOrder = (id: string) => {
 
 export const cancelOrder = (id: string) => updateOrderStatus(id, 'Cancelado');
 
+async function persistNewOrder(order: Order) {
+  let tableId: string | null = null;
+  if (order.table) {
+    const { data } = await supabase
+      .from('tables')
+      .select('id')
+      .eq('number', Number(order.table))
+      .maybeSingle();
+    tableId = data?.id ?? null;
+  }
+
+  const { error } = await supabase.from('orders').insert({
+    id: order.uuid,
+    customer_id: order.ownerId ?? null,
+    table_id: tableId,
+    type: order.type,
+    status: order.status,
+    total: orderTotal(order),
+    payment_method: order.payment,
+    payment_status: order.paymentStatus ?? 'Pendente',
+    customer_name: order.customer,
+    attendant_name: order.attendant,
+    notes: order.notes || null,
+  });
+  if (error) throw error;
+
+  const names = order.itemList.map(item => item.name);
+  const { data: products } = await supabase.from('products').select('id, name').in('name', names);
+  const idByName = new Map((products || []).map((product: any) => [product.name, product.id]));
+
+  const { error: itemsError } = await supabase.from('order_items').insert(
+    order.itemList.map(item => ({
+      order_id: order.uuid,
+      product_id: idByName.get(item.name) ?? null,
+      name: item.name,
+      quantity: item.qty,
+      unit_price: item.price,
+    })),
+  );
+  if (itemsError) throw itemsError;
+  // A mesa vira "Ocupada" por trigger no banco (funciona até para pedido de cliente sem login).
+}
+
 export const addOrder = (input: Partial<Order> & { itemList: OrderItem[] }) => {
+  const uuid = input.uuid ?? newUuid();
   const order = normalize({
-    id: input.id ?? String(Date.now()).slice(-4),
+    id: `tmp-${uuid.slice(0, 4)}`,
     type: 'Local',
     customer: 'Balcão',
     createdAt: Date.now(),
     ...input,
+    uuid,
   });
-  commit([...state, order]);
+  commit([...state, order]); // aparece na hora; o Realtime troca pelo registro oficial
+
+  void persistNewOrder(order)
+    .then(() => reloadOrders())
+    .catch((error: any) => {
+      reportError('enviar o pedido', error?.message);
+      void reloadOrders();
+    });
   return order;
 };
 
-export const getOrdersForUser = (user: { id: number; email: string; name?: string } | null): OrderView[] => {
+/** Pedidos do cliente logado (só pelo id do perfil — o RLS já filtra no banco). */
+export const getOrdersForUser = (user: { id: string } | null): OrderView[] => {
   if (!user) return [];
-  return snapshot.filter(order => order.ownerId === user.id || order.ownerEmail === user.email || order.customer.toLowerCase().includes((user.name || '').toLowerCase()));
+  return snapshot.filter(order => order.ownerId === user.id);
 };
 
-export const removeOrder = (id: string) => commit(state.filter(order => order.id !== id));
+export const removeOrder = (id: string) => updateOrderStatus(id, 'Cancelado');
 
-/** Descarta as alterações locais e recarrega a origem dos dados. */
-export const reloadOrders = () => commit(loadOrders());
+/**
+ * Recebimento da conta de uma mesa: marca como pagos todos os pedidos
+ * em aberto dela. É isso que faz o faturamento/relatórios enxergarem a venda.
+ */
+export const payTable = async (tableNumber: string, method: string): Promise<boolean> => {
+  const { data: table } = await supabase
+    .from('tables')
+    .select('id')
+    .eq('number', Number(tableNumber))
+    .maybeSingle();
+  if (!table) return false;
+  const now = Date.now();
+  commit(
+    state.map(order =>
+      order.table === tableNumber && isUnpaid(order)
+        ? { ...order, paymentStatus: 'Pago', paidAt: now, payment: method }
+        : order,
+    ),
+  );
+  const { error } = await supabase
+    .from('orders')
+    .update({ payment_status: 'Pago', paid_at: new Date(now).toISOString(), payment_method: method })
+    .eq('table_id', table.id)
+    .neq('payment_status', 'Pago')
+    .neq('status', 'Cancelado');
+  if (error) {
+    reportError('registrar o pagamento', error.message);
+    void reloadOrders();
+    return false;
+  }
+  return true;
+};
 
 /* ==========================================
    HOOKS
@@ -245,10 +390,10 @@ export function useOrders() {
     cancelOrder,
     addOrder,
     removeOrder,
+    payTable,
   };
 }
 
-/** Pedidos já separados nas colunas do painel da cozinha, do mais antigo para o mais novo. */
 export function useKitchenOrders() {
   const { orders, advanceOrder: advance, revertOrder: revert, updateOrderStatus: setStatus } = useOrders();
 

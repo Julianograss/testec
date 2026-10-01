@@ -6,8 +6,8 @@ import {
   TouchableOpacity,
   ScrollView,
   SafeAreaView,
-  Alert,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { ChefHat, Clock, Flame } from 'lucide-react-native';
 import { useAuth } from '../controller/AuthController';
 import { useKitchenOrders, formatElapsed, elapsedMinutes, OrderView } from '../store/Orders';

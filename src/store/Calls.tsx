@@ -1,11 +1,12 @@
 /**
  * src/store/Calls.tsx
  *
- * Chamados abertos pelas mesas (atendimento, conta, etc.).
- * Mesmo padrão do store de pedidos: estado fora do React, telas apenas consomem.
+ * Chamados abertos pelas mesas — gravados na tabela `calls` do Supabase,
+ * com tempo real para o atendimento ver o chamado assim que a mesa fizer.
  */
 import { useMemo, useSyncExternalStore } from 'react';
-import { CALLS } from '../data/demoData';
+import { supabase, newUuid } from '../services/supabase';
+import { onTablesChange } from '../services/realtime';
 
 export type Call = {
   id: string;
@@ -17,39 +18,82 @@ export type Call = {
 
 export type CallView = Call & { title: string };
 
-const normalize = (raw: any): Call => ({ resolvedAt: null, ...raw });
-
-// Troque por uma chamada à API quando o back-end existir.
-const loadCalls = (): Call[] => CALLS.map(normalize);
-
-let state: Call[] = loadCalls();
-let snapshot: Call[] = state;
+let state: Call[] = [];
 const listeners = new Set<() => void>();
 
 const commit = (next: Call[]) => {
   state = next;
-  snapshot = state;
   listeners.forEach(listener => listener());
 };
 
+export const reloadCalls = async () => {
+  const { data, error } = await supabase
+    .from('calls')
+    .select('id, reason, created_at, resolved_at, tables(number)')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) {
+    console.warn('[Calls] falha ao carregar chamados:', error.message);
+    return;
+  }
+  commit(
+    (data || []).map((row: any) => ({
+      id: row.id,
+      table: String(row.tables?.number ?? ''),
+      reason: row.reason,
+      createdAt: Date.parse(row.created_at),
+      resolvedAt: row.resolved_at ? Date.parse(row.resolved_at) : null,
+    })),
+  );
+};
+
+let stopRealtime: (() => void) | null = null;
+let stopAuth: (() => void) | null = null;
+
 export const subscribe = (listener: () => void) => {
   listeners.add(listener);
+  if (listeners.size === 1) {
+    void reloadCalls();
+    stopRealtime = onTablesChange(['calls'], () => void reloadCalls());
+    const { data } = supabase.auth.onAuthStateChange(() => {
+      setTimeout(() => void reloadCalls(), 0);
+    });
+    stopAuth = () => data.subscription.unsubscribe();
+  }
   return () => {
     listeners.delete(listener);
+    if (listeners.size === 0) {
+      stopRealtime?.();
+      stopAuth?.();
+      stopRealtime = stopAuth = null;
+    }
   };
 };
 
-export const getCalls = () => snapshot;
+export const getCalls = () => state;
 
-export const resolveCall = (id: string) =>
+export const resolveCall = (id: string) => {
   commit(state.map(call => (call.id === id ? { ...call, resolvedAt: Date.now() } : call)));
+  void supabase
+    .from('calls')
+    .update({ resolved_at: new Date().toISOString() })
+    .eq('id', id)
+    .then(({ error }) => {
+      if (error) void reloadCalls();
+    });
+};
 
-export const openCall = (table: string, reason: string) =>
-  commit([...state, normalize({ id: `ch${Date.now()}`, table, reason, createdAt: Date.now() })]);
+export const openCall = (table: string, reason: string) => {
+  const id = newUuid();
+  commit([...state, { id, table, reason, createdAt: Date.now(), resolvedAt: null }]);
+  void (async () => {
+    const { data } = await supabase.from('tables').select('id').eq('number', Number(table)).maybeSingle();
+    const { error } = await supabase.from('calls').insert({ id, table_id: data?.id ?? null, reason });
+    if (error) console.warn('[Calls] falha ao abrir chamado:', error.message);
+    void reloadCalls();
+  })();
+};
 
-export const reloadCalls = () => commit(loadCalls());
-
-/** Chamados pendentes, do mais antigo para o mais novo. */
 export function useCalls() {
   const calls = useSyncExternalStore(subscribe, getCalls, getCalls);
 

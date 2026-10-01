@@ -54,6 +54,7 @@ function routeForRole(role?: string): keyof RootStackParamList {
   if (role === 'ADMIN') return 'adminView';
   if (role === 'ATTENDANT') return 'atendimentoView';
   if (role === 'KITCHEN') return 'cozinhaView';
+  if (role === 'CLIENT') return 'homeView';
   return 'homeView';
 }
 
@@ -62,7 +63,7 @@ function AppNavigation() {
   if (loading) return null;
   return (
     <NavigationContainer linking={linking}>
-      <Stack.Navigator initialRouteName={routeForRole(user?.role)} screenOptions={{ headerShown: false }}>
+      <Stack.Navigator id="RootStack" initialRouteName={routeForRole(user?.role)} screenOptions={{ headerShown: false }}>
         <Stack.Screen name="homeView" component={HomeView} />
         <Stack.Screen name="cardapioView" component={CardapioView} />
         <Stack.Screen name="loginView" component={LoginView} />

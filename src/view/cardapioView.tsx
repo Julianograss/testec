@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View,
@@ -7,8 +7,8 @@ import {
   TouchableOpacity,
   ScrollView,
   Platform,
-  Alert,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { 
   ShoppingBag, 
   Flame, 
@@ -22,6 +22,7 @@ import CartBar from '../components/cartBar';
 import CartModal from '../components/cartModal';
 import { useTableSession } from '../store/table-session';
 import { useFavorites } from '../store/Favorites';
+import { openCall, useCalls } from '../store/Calls';
 
 type RootStackParamList = {
   homeView: undefined;
@@ -50,6 +51,33 @@ export default function MenuScreen({ route, navigation }: Props) {
   const { tableNumber, sessionActive } = useTableSession();
   const { isFavorite, toggleFavorite } = useFavorites();
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const { pending: pendingCalls } = useCalls();
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<any>(null);
+
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+  // Aviso rápido que some sozinho (não bloqueia a tela como o Alert).
+  const showToast = (message: string) => {
+    clearTimeout(toastTimer.current);
+    setToast(message);
+    toastTimer.current = setTimeout(() => setToast(null), 2200);
+  };
+
+  const handleCallWaiter = () => {
+    if (!sessionActive || !tableNumber) {
+      Alert.alert('Escaneie a mesa', 'Para chamar o garçom, escaneie o QR Code da sua mesa na tela inicial.');
+      return;
+    }
+    // As mesas do atendimento usam 2 dígitos (01, 02...).
+    const table = String(tableNumber).padStart(2, '0');
+    if (pendingCalls.some(call => call.table === table)) {
+      showToast('O garçom já foi avisado e está a caminho.');
+      return;
+    }
+    openCall(table, 'Solicitou atendimento');
+    showToast(`Garçom chamado para a mesa ${table}.`);
+  };
 
   const getFilters = () => {
     const cat = category.toLowerCase().trim();
@@ -111,8 +139,21 @@ export default function MenuScreen({ route, navigation }: Props) {
     return [];
   };
 
+  // Subcategoria de cada produto, usada pelos botões de filtro.
+  const KIND_BY_ID: Record<string, string> = {
+    '1': 'Cortes', '2': 'Cortes', '3': 'Espetinhos',
+    '4': 'Hambúrgueres', '5': 'Hambúrgueres',
+    '6': 'Tradicional', '7': 'Especiais',
+    '8': 'Sem álcool', '9': 'Com álcool', '10': 'Sem álcool',
+    '11': 'Fritas', '12': 'Petiscos',
+    '13': 'Doces', '14': 'Gelados',
+  };
+
   const filters = getFilters();
   const products = getProducts();
+  const visibleProducts = products.filter(
+    item => activeFilter === 'Todos' || KIND_BY_ID[item.id] === activeFilter,
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -177,7 +218,12 @@ export default function MenuScreen({ route, navigation }: Props) {
         </ScrollView>
 
         <View style={styles.productList}>
-          {products.map((item) => (
+          {visibleProducts.length === 0 && (
+            <Text style={{ textAlign: 'center', color: COLORS.textMuted, paddingVertical: 24 }}>
+              Nenhum item nesta seleção ainda.
+            </Text>
+          )}
+          {visibleProducts.map((item) => (
             <View key={item.id} style={styles.productCard}>
               <View style={styles.productImageArea}>
                 <Text style={styles.productEmoji}>{item.icon}</Text>
@@ -204,7 +250,7 @@ export default function MenuScreen({ route, navigation }: Props) {
                     style={styles.addButton}
                     onPress={() => {
                       addToCart(item);
-                      Alert.alert('Sucesso', `${item.title} adicionado à sacola!`);
+                      showToast(`${item.title} adicionado à sacola!`);
                     }}>
                     <Text style={styles.addButtonText}>+ Adicionar</Text>
                   </TouchableOpacity>
@@ -228,7 +274,13 @@ export default function MenuScreen({ route, navigation }: Props) {
           }}
       />
 
-      <TouchableOpacity style={styles.fab} activeOpacity={0.9}>
+      {toast && (
+        <View pointerEvents="none" style={styles.toast}>
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      )}
+
+      <TouchableOpacity style={styles.fab} activeOpacity={0.9} onPress={handleCallWaiter}>
         <BellRing color={COLORS.white} size={20} strokeWidth={2.5} />
         <Text style={styles.fabText}>Chamar garçom</Text>
       </TouchableOpacity>
@@ -238,6 +290,8 @@ export default function MenuScreen({ route, navigation }: Props) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
+  toast: { position: 'absolute', top: 72, alignSelf: 'center', maxWidth: '90%', backgroundColor: COLORS.dark, paddingVertical: 10, paddingHorizontal: 18, borderRadius: 24, zIndex: 50, elevation: 6 },
+  toastText: { color: COLORS.white, fontSize: 14, fontWeight: '600', textAlign: 'center' },
   scrollContent: { paddingBottom: 100 },
   header: { 
     flexDirection: 'row', 

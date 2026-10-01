@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  Alert,
   Pressable,
   ScrollView,
   View,
@@ -13,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import {
   Utensils,
   ChefHat,
@@ -146,7 +146,7 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
   
   // Estado para controlar a abertura/fechamento do menu lateral
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { tableNumber, sessionActive, openTableSession } = useTableSession();
+  const { tableNumber, sessionActive, openTableSession, closeTableSession } = useTableSession();
   const { user, logout, updateProfile, changePassword } = useAuth();
   const { orders } = useOrders();
   const { favorites, toggleFavorite } = useFavorites();
@@ -207,6 +207,23 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
     setShowScanner(true);
   };
 
+  const handleLeaveTable = () => {
+    Alert.alert('Sair da mesa', 'Deseja desvincular este atendimento da mesa? Novos pedidos deixarão de ser enviados para ela.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Sair da mesa',
+        style: 'destructive',
+        onPress: () => {
+          closeTableSession();
+          setScannedResult(null);
+        },
+      },
+    ]);
+  };
+
+  const displayTable = tableNumber || scannedResult;
+  const displayTablePadded = displayTable ? String(displayTable).padStart(2, '0') : null;
+
   const handleCategory = (categoryTitle: string) => {
     navigation?.navigate('cardapioView', { category: categoryTitle, tableNumber: tableNumber || undefined, orderType: sessionActive ? 'local' : serviceMode === 'entrega' ? 'delivery' : 'local' });
   };
@@ -241,13 +258,18 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
               <View style={{ flex: 1 }}>
                 <Text style={styles.qrTag}>COMECE POR AQUI</Text>
                 <Text style={styles.qrTitle}>
-                  {(tableNumber || scannedResult) ? `Mesa: ${tableNumber || scannedResult}` : 'Escaneie sua mesa'}
+                  {displayTablePadded ? `Mesa: ${displayTablePadded}` : 'Escaneie sua mesa'}
                 </Text>
                 <Text style={styles.qrSub}>
-                  {(tableNumber || scannedResult)
+                  {displayTablePadded
                     ? 'Seu atendimento já está personalizado para este local.'
                     : 'Use o QR code da mesa para personalizar seu atendimento.'}
                 </Text>
+                {displayTablePadded ? (
+                  <Pressable onPress={handleLeaveTable} style={{ marginTop: 6 }}>
+                    <Text style={styles.qrLeaveLink}>Sair da mesa</Text>
+                  </Pressable>
+                ) : null}
               </View>
               <Pressable style={styles.qrButton} onPress={handleScannerOpen}>
                 <ScanLine size={28} color="#ffffff" />
@@ -280,7 +302,7 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
               style={[styles.tab, serviceMode === 'entrega' && styles.activeTab, sessionActive && styles.disabledTab]}
               disabled={sessionActive}
               onPress={() => {
-                if (sessionActive) return Alert.alert('Delivery indisponível', `O QR Code da mesa ${tableNumber} está ativo.`);
+                if (sessionActive) return Alert.alert('Delivery indisponível', `O QR Code da mesa ${displayTablePadded} está ativo.`);
                 setServiceMode('entrega');
               }}>
               <View style={styles.tabContent}>
@@ -340,9 +362,9 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
           <View style={styles.infoBox}>
             <Info size={20} color="#6344FF" />
             <Text style={styles.infoText}>
-              {scannedResult
-                ? `Scanner integrado! Código atual gravado: ${scannedResult}`
-                : 'Demonstração: as categorias e o scanner ainda não estão conectados ao restaurante.'}
+              {displayTablePadded
+                ? `Pedidos feitos agora vão direto para a Mesa ${displayTablePadded}.`
+                : 'Escaneie o QR Code da sua mesa para vincular o pedido a ela, ou peça para retirada/entrega.'}
             </Text>
           </View>
         </View>
@@ -472,6 +494,12 @@ const styles = StyleSheet.create({
     color: '#71717a',
     marginTop: 6,
     lineHeight: 18,
+  },
+  qrLeaveLink: {
+    fontSize: 12,
+    color: '#C84325',
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   qrButton: {
     width: 56,

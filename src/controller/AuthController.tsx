@@ -1,25 +1,41 @@
+/**
+ * src/controller/AuthController.tsx
+ *
+ * Autenticação real via Supabase Auth + tabela `profiles`.
+ * Ao criar a conta (signUp), o gatilho `handle_new_user` do banco já cria
+ * a linha em `profiles` com role 'CUSTOMER' — aqui só completamos o endereço.
+ * Promover alguém a ATTENDANT/KITCHEN/ADMIN é feito trocando `role` na
+ * tabela `profiles` (tela de Equipe do admin, ou direto no Supabase).
+ */
 import React, { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { supabase } from '../services/supabase';
 
 export type UserRole = 'CLIENT' | 'ATTENDANT' | 'KITCHEN' | 'ADMIN';
-export interface AuthUser { id: number; name: string; role: UserRole; email: string; address?: string; }
-interface AuthContextValue { user: AuthUser | null; loading: boolean; login: (email: string, password: string) => Promise<AuthUser>; logout: () => void; updateProfile: (patch: Partial<Pick<AuthUser, 'name' | 'email' | 'address'>>) => Promise<AuthUser>; changePassword: (currentPassword: string, newPassword: string) => Promise<void>; }
+export interface AuthUser {
+  id: string;
+  name: string;
+  role: UserRole;
+  email: string;
+  address?: string;
+  phone?: string;
+  cpf?: string;
+  active?: boolean;
+}
+export interface RegisterData { name: string; email: string; password: string; address?: string; }
+
+interface AuthContextValue {
+  user: AuthUser | null;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<AuthUser>;
+  logout: () => void;
+  updateProfile: (patch: Partial<Pick<AuthUser, 'name' | 'email' | 'address'>>) => Promise<AuthUser>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  register: (data: RegisterData) => Promise<AuthUser>;
+}
+
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-const SESSION_KEY = 'fogo-fumaca-auth-session-v1';
-const PROFILE_KEY = 'fogo-fumaca-auth-profiles-v1';
-const PASSWORD_KEY = 'fogo-fumaca-auth-passwords-v1';
-const getStorage = () => (globalThis as any)?.localStorage as any;
-const readJson = (key: string, fallback: any) => { try { const raw = getStorage()?.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } };
-const writeJson = (key: string, value: any) => { try { getStorage()?.setItem(key, JSON.stringify(value)); } catch { /* memória */ } };
 
-const defaultAccounts: Record<string, AuthUser> = {
-  'lucas@gmail.com': { id: 1, name: 'Lucas', role: 'CLIENT', email: 'lucas@gmail.com', address: 'Não informado' },
-  'joao@gmail.com': { id: 2, name: 'João', role: 'ATTENDANT', email: 'joao@gmail.com' },
-  'augusto@gmail.com': { id: 3, name: 'Augusto', role: 'KITCHEN', email: 'augusto@gmail.com' },
-  'admin@gmail.com': { id: 4, name: 'Admin', role: 'ADMIN', email: 'admin@gmail.com' },
-  'juliano.admin': { id: 4, name: 'Juliano Grass', role: 'ADMIN', email: 'juliano.admin' },
-  'juliano.admin@gmail.com': { id: 4, name: 'Juliano Grass', role: 'ADMIN', email: 'juliano.admin@gmail.com' },
-};
-
+/** Traduz o texto livre de `profiles.role` para o papel usado nas rotas do app. */
 export function normalizeUserRole(value: unknown): UserRole {
   const role = String(value || '').trim().toUpperCase();
   if (role === 'ADMIN' || role.includes('ADMINISTRADOR') || role.includes('GERENTE') || role.includes('CAIXA')) return 'ADMIN';
@@ -28,44 +44,152 @@ export function normalizeUserRole(value: unknown): UserRole {
   return 'CLIENT';
 }
 
-function roleForIdentifier(email: string, fallback: unknown): UserRole {
-  const normalized = email.trim().toLowerCase();
-  if (normalized === 'admin@gmail.com' || normalized === 'juliano.admin' || normalized === 'juliano.admin@gmail.com') return 'ADMIN';
-  if (normalized === 'joao@gmail.com') return 'ATTENDANT';
-  if (normalized === 'augusto@gmail.com') return 'KITCHEN';
-  return normalizeUserRole(fallback);
+async function fetchProfile(id: string, fallbackEmail?: string): Promise<AuthUser> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name, role, email, phone, cpf, address, active')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) {
+    // O gatilho do banco cria o perfil no insert do auth.users; se ainda não
+    // propagou (corrida rara logo após o cadastro), devolve um perfil mínimo.
+    return { id, name: fallbackEmail?.split('@')[0] || 'Cliente', role: 'CLIENT', email: fallbackEmail || '' };
+  }
+  return {
+    id: data.id,
+    name: data.name,
+    role: normalizeUserRole(data.role),
+    email: data.email || fallbackEmail || '',
+    address: data.address || undefined,
+    phone: data.phone || undefined,
+    cpf: data.cpf || undefined,
+    active: data.active,
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { const saved = readJson(SESSION_KEY, null); if (saved?.id) setUser({ ...saved, role: roleForIdentifier(saved.email || '', saved.role) }); setLoading(false); }, []);
-  const login = async (email: string, password: string): Promise<AuthUser> => new Promise((resolve, reject) => {
-    setTimeout(() => {
-      const profiles = readJson(PROFILE_KEY, {});
-      const accounts = { ...defaultAccounts, ...profiles };
-      const normalized = email.trim().toLowerCase();
-      const storedPassword = readJson(PASSWORD_KEY, {})[normalized] || '123456';
-      const rawUser = accounts[normalized];
-      const loggedUser = password === storedPassword && rawUser ? { ...rawUser, role: roleForIdentifier(normalized, rawUser.role) } : undefined;
-      if (!loggedUser) { reject(new Error('Credenciais inválidas. Tente usar as contas de demonstração.')); return; }
-      setUser(loggedUser); writeJson(SESSION_KEY, loggedUser); resolve(loggedUser);
-    }, 250);
-  });
-  const logout = () => { setUser(null); try { getStorage()?.removeItem(SESSION_KEY); } catch { /* memória */ } };
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      const authUser = data.session?.user;
+      if (authUser) {
+        try {
+          const profile = await fetchProfile(authUser.id, authUser.email || undefined);
+          if (mounted) setUser(profile);
+        } catch {
+          if (mounted) setUser(null);
+        }
+      }
+      if (mounted) setLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT' || !session?.user) {
+        if (mounted) setUser(null);
+        return;
+      }
+      try {
+        const profile = await fetchProfile(session.user.id, session.user.email || undefined);
+        if (mounted) setUser(profile);
+      } catch {
+        /* mantém o usuário anterior se a busca do perfil falhar momentaneamente */
+      }
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const login = async (email: string, password: string): Promise<AuthUser> => {
+    const normalized = email.trim().toLowerCase();
+    const { data, error } = await supabase.auth.signInWithPassword({ email: normalized, password });
+    if (error) throw new Error(error.message === 'Invalid login credentials' ? 'Credenciais inválidas. Confira e-mail e senha.' : error.message);
+    if (!data.user) throw new Error('Não foi possível entrar. Tente novamente.');
+    const profile = await fetchProfile(data.user.id, data.user.email || normalized);
+    setUser(profile);
+    return profile;
+  };
+
+  const logout = () => {
+    setUser(null);
+    void supabase.auth.signOut();
+  };
+
   const updateProfile = async (patch: Partial<Pick<AuthUser, 'name' | 'email' | 'address'>>): Promise<AuthUser> => {
     if (!user) throw new Error('Faça login para editar sua conta.');
-    const next = { ...user, ...patch, email: String(patch.email || user.email).trim().toLowerCase() };
-    const profiles = readJson(PROFILE_KEY, {}); delete profiles[user.email]; profiles[next.email] = next; writeJson(PROFILE_KEY, profiles); setUser(next); writeJson(SESSION_KEY, next); return next;
+    const nextEmail = patch.email ? patch.email.trim().toLowerCase() : user.email;
+
+    // E-mail é gerenciado pelo Supabase Auth (precisa de confirmação); os
+    // demais campos vivem só em `profiles`.
+    if (patch.email && nextEmail !== user.email) {
+      const { error: authError } = await supabase.auth.updateUser({ email: nextEmail });
+      if (authError) throw new Error(authError.message);
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ name: patch.name ?? user.name, address: patch.address ?? user.address, email: nextEmail })
+      .eq('id', user.id);
+    if (error) throw new Error(error.message);
+
+    const next: AuthUser = { ...user, name: patch.name ?? user.name, address: patch.address ?? user.address, email: nextEmail };
+    setUser(next);
+    return next;
   };
+
   const changePassword = async (currentPassword: string, newPassword: string) => {
     if (!user) throw new Error('Faça login para alterar sua senha.');
-    const passwords = readJson(PASSWORD_KEY, {}); const current = passwords[user.email] || '123456';
-    if (current !== currentPassword) throw new Error('A senha atual está incorreta.');
     if (newPassword.length < 6) throw new Error('A nova senha precisa ter pelo menos 6 caracteres.');
-    passwords[user.email] = newPassword; writeJson(PASSWORD_KEY, passwords);
+    // O Supabase não confere a senha atual sozinho: reautentica com ela antes de trocar.
+    const { error: reauthError } = await supabase.auth.signInWithPassword({ email: user.email, password: currentPassword });
+    if (reauthError) throw new Error('A senha atual está incorreta.');
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw new Error(error.message);
   };
-  const value = useMemo(() => ({ user, loading, login, logout, updateProfile, changePassword }), [user, loading]);
+
+  const register = async ({ name, email, password, address }: RegisterData): Promise<AuthUser> => {
+    const normalized = email.trim().toLowerCase();
+    if (name.trim().length < 2) throw new Error('Informe seu nome.');
+    if (!/^\S+@\S+\.\S+$/.test(normalized)) throw new Error('Informe um e-mail válido.');
+    if (password.length < 6) throw new Error('A senha precisa ter pelo menos 6 caracteres.');
+
+    const { data, error } = await supabase.auth.signUp({
+      email: normalized,
+      password,
+      options: { data: { name: name.trim() } },
+    });
+    if (error) throw new Error(error.message === 'User already registered' ? 'Já existe uma conta com este e-mail.' : error.message);
+    if (!data.user) throw new Error('Não foi possível concluir o cadastro. Tente novamente.');
+
+    // Se a confirmação por e-mail estiver desligada no projeto, já existe sessão aqui.
+    if (address?.trim()) {
+      await supabase.from('profiles').update({ address: address.trim() }).eq('id', data.user.id);
+    }
+
+    if (!data.session) {
+      // Confirmação de e-mail ligada: não há sessão ainda.
+      throw new Error('Cadastro realizado! Confirme seu e-mail para poder entrar.');
+    }
+
+    const profile = await fetchProfile(data.user.id, normalized);
+    const finalProfile = address?.trim() ? { ...profile, address: address.trim() } : profile;
+    setUser(finalProfile);
+    return finalProfile;
+  };
+
+  const value = useMemo(() => ({ user, loading, login, logout, updateProfile, changePassword, register }), [user, loading]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
-export function useAuth(): AuthContextValue { const context = useContext(AuthContext); if (!context) throw new Error('useAuth precisa estar dentro de <AuthProvider>.'); return context; }
+
+export function useAuth(): AuthContextValue {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth precisa estar dentro de <AuthProvider>.');
+  return context;
+}

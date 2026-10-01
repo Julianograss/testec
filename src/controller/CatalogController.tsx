@@ -12,7 +12,7 @@
  * foi realmente salvo.
  */
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect } from 'react';
-import { Alert } from 'react-native';
+import { Alert } from '../utils/alert';
 import { PRODUCTS, CATEGORIES, TABLES, STAFF, RESTAURANT } from '../data/demoData';
 import { productsApi, categoriesApi, tablesApi, staffApi, settingsApi } from '../services/api';
 import { isValidPrice, isValidPhone, isValidCpf, isTableNumberTaken } from '../utils/validators';

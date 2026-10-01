@@ -89,8 +89,11 @@ export default function CartModal({ visible, onClose, onCheckout }: CartModalPro
               </Text>
             </View>
 
-            <TouchableOpacity style={styles.checkoutBtn} onPress={onCheckout}>
-              <Text style={styles.checkoutBtnText}>Avançar para Pagamento</Text>
+            <TouchableOpacity
+              style={[styles.checkoutBtn, items.length === 0 && { opacity: 0.5 }]}
+              disabled={items.length === 0}
+              onPress={onCheckout}>
+              <Text style={styles.checkoutBtnText}>{items.length === 0 ? 'Sacola vazia' : 'Avançar para Pagamento'}</Text>
             </TouchableOpacity>
           </View>
         </View>

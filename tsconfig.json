@@ -11,9 +11,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx"
-  ],
-  "extends": "expo/tsconfig.base"
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

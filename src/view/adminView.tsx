@@ -8,10 +8,10 @@ import {
   SafeAreaView,
   Switch,
   TextInput,
-  Alert,
   Modal,
   useWindowDimensions 
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { 
   Flame, LogOut, LayoutDashboard, ClipboardList, 
   MenuSquare, Tags, Armchair, Users, BarChart3, 
@@ -700,7 +700,7 @@ export default function adminView({ navigation }: any) {
               );
             })}
           </ScrollView>
-          {isLargeScreen && (<TouchableOpacity style={styles.logoutButton} onPress={() => { logout(); navigation.replace('loginView'); }}><LogOut color={COLORS.textMain} size={20} /><Text style={styles.logoutText}>Sair do sistema</Text></TouchableOpacity>)}
+          <TouchableOpacity style={[styles.logoutButton, !isLargeScreen && { paddingVertical: 10, paddingHorizontal: 20 }]} onPress={() => { logout(); navigation.replace('loginView'); }}><LogOut color={COLORS.textMain} size={20} /><Text style={styles.logoutText}>Sair do sistema</Text></TouchableOpacity>
         </View>
 
         {/* ÁREA DE CONTEÚDO */}

@@ -9,13 +9,17 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  Alert
+  Share,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import { X } from 'lucide-react-native';
 import { useCart } from '../store/Cart'; // Importação do carrinho
 import { addOrder } from '../store/Orders';
 import { useTableSession } from '../store/table-session';
 import { useAuth } from '../controller/AuthController';
+
+const PIX_CODE =
+  '00020101021226890014br.gov.bcb.pix2567fogoefumaca.demo/pix/97a2a3b4c5d65204000053039865802BR5920Fogo e Fumaca LTDA6009Sao Paulo62070503***6304DEMO';
 
 const COLORS = {
   overlayBg: 'rgba(26, 26, 26, 0.6)',
@@ -35,7 +39,9 @@ export default function CheckoutScreen({ route, navigation }) {
   const { user } = useAuth();
   const requestedOrderType = route?.params?.orderType || 'local';
   const orderType = sessionActive ? 'local' : requestedOrderType;
-  const linkedTable = sessionActive ? tableNumber : route?.params?.tableNumber || null;
+  // As mesas do atendimento usam 2 dígitos (01, 02...); padroniza para o pedido aparecer na mesa certa.
+  const rawTable = sessionActive ? tableNumber : route?.params?.tableNumber || null;
+  const linkedTable = rawTable ? String(rawTable).padStart(2, '0') : null;
   const [paymentMethod, setPaymentMethod] = useState('pix'); 
   const [changeAmount, setChangeAmount] = useState('');
 
@@ -52,7 +58,32 @@ export default function CheckoutScreen({ route, navigation }) {
   // 3. Formatação R$ 00,00
   const totalValue = `R$ ${valorFinal.toFixed(2).replace('.', ',')}`;
 
-  const isButtonDisabled = paymentMethod === 'dinheiro' && changeAmount.trim() === '';
+  const isCartEmpty = items.length === 0;
+  const isButtonDisabled = isCartEmpty || (paymentMethod === 'dinheiro' && changeAmount.trim() === '');
+
+  const copyPix = async () => {
+    try {
+      const g = globalThis as any;
+      if (Platform.OS === 'web') {
+        if (g.navigator?.clipboard?.writeText) {
+          await g.navigator.clipboard.writeText(PIX_CODE);
+        } else {
+          const field = g.document.createElement('textarea');
+          field.value = PIX_CODE;
+          g.document.body.appendChild(field);
+          field.select();
+          g.document.execCommand('copy');
+          g.document.body.removeChild(field);
+        }
+        Alert.alert('Código copiado', 'Cole no app do seu banco para pagar.');
+      } else {
+        // No celular abre o menu de compartilhar, de onde dá para copiar o código.
+        await Share.share({ message: PIX_CODE });
+      }
+    } catch {
+      Alert.alert('Não foi possível copiar', 'Selecione o código e copie manualmente.');
+    }
+  };
 
   const renderPaymentOption = (id, label) => {
     const isSelected = paymentMethod === id;
@@ -99,10 +130,10 @@ export default function CheckoutScreen({ route, navigation }) {
                 <Text style={styles.pixSubtitle}>Use o código abaixo no app do seu banco.</Text>
                 <View style={styles.pixCodeBox}>
                   <Text style={styles.pixCodeText}>
-                    00020101021226890014br.gov.bcb.pix2567fogoefumaca.demo/pix/97a2a3b4c5d65204000053039865802BR5920Fogo e Fumaca LTDA6009Sao Paulo62070503***6304DEMO
+                    {PIX_CODE}
                   </Text>
                 </View>
-                <TouchableOpacity style={styles.copyButton}>
+                <TouchableOpacity style={styles.copyButton} onPress={copyPix}>
                   <Text style={styles.copyButtonText}>Copiar código PIX</Text>
                 </TouchableOpacity>
               </View>
@@ -120,12 +151,15 @@ export default function CheckoutScreen({ route, navigation }) {
               style={[styles.submitButton, isButtonDisabled && styles.submitButtonDisabled]}
               disabled={isButtonDisabled}
               onPress={() => {
+                if (items.length === 0) {
+                  Alert.alert('Sacola vazia', 'Adicione itens ao carrinho antes de finalizar.');
+                  return;
+                }
                 addOrder({
                   type: orderType === 'delivery' ? 'Delivery' : orderType === 'retirada' ? 'Retirada' : 'Local',
                   customer: orderType === 'delivery' ? 'Cliente delivery' : linkedTable ? `Mesa ${linkedTable}` : 'Mesa do cliente',
                   table: linkedTable,
                   ownerId: user?.id,
-                  ownerEmail: user?.email,
                   itemList: items.map(item => ({
                     name: item.title,
                     qty: item.quantity,

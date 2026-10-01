@@ -9,9 +9,9 @@ import {
   Platform,
   Modal,
   TextInput,
-  Alert,
   KeyboardAvoidingView,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import {
   Flame,
   Clock,

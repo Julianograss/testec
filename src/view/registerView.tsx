@@ -11,8 +11,8 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { Alert } from '../utils/alert';
 import {
   Flame,
   X,
@@ -32,10 +32,13 @@ import {
 } from 'lucide-react-native';
 
 import { RootStackParamList } from '../../App';
+import { useAuth } from '../controller/AuthController';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'registerView'>;
 
 export default function RegisterScreen({ navigation }: Props) {
+  const { register } = useAuth();
+  const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     nome: '',
     email: '',
@@ -88,9 +91,23 @@ export default function RegisterScreen({ navigation }: Props) {
     }
   };
 
-  const handleRegister = (e?: any) => {
+  const handleRegister = async (e?: any) => {
     if (e && e.preventDefault) e.preventDefault();
-    console.log('Dados cadastrados:', formData);
+    if (submitting) return;
+    const street = formData.numero.trim() ? `${formData.rua.trim()}, ${formData.numero.trim()}` : formData.rua.trim();
+    const address = [street, formData.complemento.trim(), formData.bairro.trim(), formData.cidade.trim()]
+      .filter(Boolean)
+      .join(' - ');
+    setSubmitting(true);
+    try {
+      await register({ name: formData.nome, email: formData.email, password: formData.senha, address });
+      navigation.replace('homeView');
+      Alert.alert('Conta criada!', 'Bem-vindo(a) ao Fogo & Fumaça.');
+    } catch (error: any) {
+      Alert.alert('Não foi possível cadastrar', error?.message || 'Tente novamente.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleGoToLogin = (e?: any) => {
