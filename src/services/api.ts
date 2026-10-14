@@ -343,3 +343,49 @@ export const tableCodesApi = {
     if (previous) await supabase.storage.from(QR_BUCKET).remove([previous as string]);
   },
 };
+
+/* ==========================================
+   AUTENTICAÇÃO / SEGURANÇA
+========================================== */
+export const authApi = {
+  async changePassword({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) {
+    // Busca o usuário logado atualmente
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user?.email) throw asError(userError, 'Não foi possível validar sua sessão.');
+
+    // Verifica se a senha atual está correta fazendo um "login" silencioso
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword,
+    });
+    
+    if (signInError) throw new ApiError('A senha atual está incorreta.');
+
+    // Atualiza para a nova senha informada
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+    
+    if (updateError) throw asError(updateError, 'Não foi possível alterar a senha.');
+    return true;
+  },
+
+  async endOtherSessions() {
+    // O Supabase possui uma função nativa para deslogar todos os outros dispositivos
+    const { error } = await supabase.auth.signOut({ scope: 'others' });
+    if (error) throw asError(error, 'Não foi possível encerrar as outras sessões.');
+    return true;
+  },
+};
+
+/* ==========================================
+   RELATÓRIOS
+========================================== */
+export const reportsApi = {
+  async exportPdf(params: { period: string; html: string }) {
+    // No aplicativo nativo, a tela adminView já usa o 'expo-print' e o 'expo-sharing'
+    // para gerar e compartilhar o arquivo fisicamente. Esta função fica aqui apenas 
+    // para manter a compatibilidade ou para registrar o log no banco no futuro, se necessário.
+    return Promise.resolve(true);
+  },
+};
