@@ -7,6 +7,7 @@ import { TableSessionProvider } from './src/store/table-session';
 import { FavoritesProvider } from './src/store/Favorites';
 import { CatalogProvider } from './src/controller/CatalogController';
 import { useAuth } from './src/controller/AuthController';
+import { Text, View } from 'react-native';
 import HomeView from './src/view/homeView';
 import CardapioView from './src/view/cardapioView';
 import LoginView from './src/view/loginView';
@@ -16,8 +17,19 @@ import AtendimentoView from './src/view/atendimentoView';
 import CozinhaView from './src/view/cozinhaView';
 import AdminView from './src/view/adminView';
 
+import { ErrorBoundary } from 'react-error-boundary';
+
+function ErrorFallback({error}: any) {
+  return (
+    <View style={{flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20}}>
+      <Text style={{color: 'red', fontSize: 18, fontWeight: 'bold'}}>A Aplicação Crashou:</Text>
+      <Text>{error.message}</Text>
+    </View>
+  );
+}
+
 export type RootStackParamList = {
-  homeView: { tableNumber?: string } | undefined;
+  homeView: { tableCode?: string } | undefined;
   cardapioView: { category?: string; tableNumber?: string; orderType?: 'local' | 'delivery' | 'retirada' } | undefined;
   loginView: undefined;
   LoginScreen: undefined;
@@ -35,7 +47,7 @@ const linking: LinkingOptions<RootStackParamList> = {
   prefixes: [VERCEL_PRODUCTION_URL, 'http://localhost:8081', 'http://localhost:19006'],
   config: {
     screens: {
-      homeView: { path: 'mesa/:tableNumber' },
+      homeView: { path: 'mesa/:tableCode' },
       loginView: 'loginView',
       LoginScreen: 'login',
       registerView: 'registerView',
@@ -54,7 +66,6 @@ function routeForRole(role?: string): keyof RootStackParamList {
   if (role === 'ADMIN') return 'adminView';
   if (role === 'ATTENDANT') return 'atendimentoView';
   if (role === 'KITCHEN') return 'cozinhaView';
-  if (role === 'CLIENT') return 'homeView';
   return 'homeView';
 }
 
@@ -78,7 +89,7 @@ function AppNavigation() {
   );
 }
 
-export default function App() {
+/*export default function App() {
   return (
     <AuthProvider>
       <TableSessionProvider>
@@ -91,5 +102,22 @@ export default function App() {
         </CatalogProvider>
       </TableSessionProvider>
     </AuthProvider>
+  );
+}*/
+export default function App() {
+  return (
+    <ErrorBoundary FallbackComponent={ErrorFallback}>
+      <AuthProvider>
+      <TableSessionProvider>
+        <CatalogProvider>
+          <CartProvider>
+            <FavoritesProvider>
+              <AppNavigation />
+            </FavoritesProvider>
+          </CartProvider>
+        </CatalogProvider>
+      </TableSessionProvider>
+    </AuthProvider>
+    </ErrorBoundary>
   );
 }

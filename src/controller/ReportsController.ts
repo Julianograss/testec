@@ -16,7 +16,8 @@ export const periodRange = (period: ReportPeriod, now = Date.now()): PeriodRange
   }
 };
 const inRange = (order: OrderView, start: number, end: number) => order.createdAt >= start && order.createdAt <= end;
-const isPaid = (order: OrderView) => order.paymentStatus === 'Pago' || order.status === 'Entregue';
+// A venda entra no faturamento quando o atendimento libera a saída (garçom/motoboy) => status 'Entregue'.
+const isPaid = (order: OrderView) => order.status === 'Entregue';
 const percent = (part: number, total: number) => total > 0 ? `${Math.round((part / total) * 100)}%` : '0%';
 const aggregateProducts = (orders: OrderView[]) => {
   const map = new Map<string, { nome: string; qtd: number; receita: number }>();

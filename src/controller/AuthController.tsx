@@ -21,6 +21,9 @@ export interface AuthUser {
   cpf?: string;
   active?: boolean;
 }
+export class EmailConfirmationRequired extends Error {
+  constructor() { super('Cadastro realizado! Enviamos um e-mail de confirmação: confirme-o para poder entrar.'); this.name = 'EmailConfirmationRequired'; }
+}
 export interface RegisterData { name: string; email: string; password: string; address?: string; }
 
 interface AuthContextValue {
@@ -38,8 +41,8 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 /** Traduz o texto livre de `profiles.role` para o papel usado nas rotas do app. */
 export function normalizeUserRole(value: unknown): UserRole {
   const role = String(value || '').trim().toUpperCase();
-  if (role === 'ADMIN' || role.includes('ADMINISTRADOR') || role.includes('GERENTE') || role.includes('CAIXA')) return 'ADMIN';
-  if (role === 'ATTENDANT' || role.includes('ATEND') || role.includes('GARÇOM') || role.includes('GARCON')) return 'ATTENDANT';
+  if (role === 'ADMIN' || role.includes('ADMINISTRADOR') || role.includes('GERENTE') || role.includes('CAIXA') || role === 'CASHIER' || role === 'MANAGER') return 'ADMIN';
+  if (role === 'ATTENDANT' || role === 'WAITER' || role.includes('ATEND') || role.includes('GARÇOM') || role.includes('GARCON')) return 'ATTENDANT';
   if (role === 'KITCHEN' || role.includes('COZIN')) return 'KITCHEN';
   return 'CLIENT';
 }
@@ -88,17 +91,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (mounted) setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT' || !session?.user) {
         if (mounted) setUser(null);
         return;
       }
-      try {
-        const profile = await fetchProfile(session.user.id, session.user.email || undefined);
-        if (mounted) setUser(profile);
-      } catch {
-        /* mantém o usuário anterior se a busca do perfil falhar momentaneamente */
-      }
+      // Não faça await de chamadas ao Supabase dentro deste callback (pode travar o cliente):
+      // adia para o próximo ciclo.
+      setTimeout(async () => {
+        try {
+          const profile = await fetchProfile(session.user.id, session.user.email || undefined);
+          if (mounted) setUser(profile);
+        } catch {
+          /* mantém o usuário anterior se a busca do perfil falhar momentaneamente */
+        }
+      }, 0);
     });
 
     return () => {
@@ -175,7 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!data.session) {
       // Confirmação de e-mail ligada: não há sessão ainda.
-      throw new Error('Cadastro realizado! Confirme seu e-mail para poder entrar.');
+      throw new EmailConfirmationRequired();
     }
 
     const profile = await fetchProfile(data.user.id, normalized);

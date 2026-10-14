@@ -40,4 +40,5 @@ yarn-error.*
 /ios
 /android
 
-# varia
+# Variaveis de Ambiente secretas
+.env

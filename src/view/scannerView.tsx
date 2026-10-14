@@ -1,21 +1,20 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, Button, TextInput, TouchableOpacity, Platform, KeyboardAvoidingView } from 'react-native';
+import { ScanLine } from 'lucide-react-native';
 import { CameraView, useCameraPermissions, BarcodeScanningResult } from 'expo-camera';
-import { getTableNumberFromLink } from '../utils/tableLinks';
+import { getTableCodeFromInput, normalizeTableCode, formatTableCode, TABLE_CODE_LENGTH } from '../utils/tableLinks';
 
 interface ScannerProps {
-  onCodeRead: (data: string) => void;
+  /** Recebe o link do QR ou o código digitado. Devolve uma mensagem de erro (ou nada, se deu certo). */
+  onCodeRead: (data: string) => Promise<string | null | void> | string | null | void;
   onClose: () => void;
 }
 
 /**
- * Tela de vínculo com a mesa.
- * - No celular/app nativo: abre a câmera e lê o QR Code direto.
- * - Na web: a leitura de código de barras pela câmera do navegador é
- *   inconsistente entre aparelhos, então aqui priorizamos a entrada manual
- *   (colar o link do QR ou digitar o número da mesa) — o fluxo "de verdade"
- *   na web é o cliente abrir a câmera do próprio celular, que já leva direto
- *   para a URL da mesa.
+ * Tela de vínculo com a mesa. Oferece sempre as duas formas de entrar:
+ *  1. Escanear o QR Code com a câmera (celular, app e navegador com HTTPS).
+ *  2. Digitar o código impresso abaixo do QR Code (para quem não tem/ não quer usar a câmera).
+ * No app nativo a câmera abre direto; no navegador a tela mostra os dois botões.
  */
 export default function Scanner({ onCodeRead, onClose }: ScannerProps) {
   const isWeb = Platform.OS === 'web';
@@ -25,41 +24,64 @@ export default function Scanner({ onCodeRead, onClose }: ScannerProps) {
   const [manualValue, setManualValue] = useState('');
   const [manualError, setManualError] = useState<string | null>(null);
 
-  const submitManual = () => {
-    const table = getTableNumberFromLink(manualValue);
-    if (!table) {
-      setManualError('Cole o link do QR Code (ex.: .../mesa/12) ou digite só o número da mesa.');
+  const [busy, setBusy] = useState(false);
+
+  const submitManual = async () => {
+    const code = getTableCodeFromInput(manualValue);
+    if (!code) {
+      setManualError(`Digite os ${TABLE_CODE_LENGTH} caracteres do código impresso abaixo do QR Code.`);
       return;
     }
     setManualError(null);
-    onCodeRead(manualValue.trim());
+    setBusy(true);
+    const error = await onCodeRead(code);
+    setBusy(false);
+    if (error) setManualError(error);
   };
 
   const renderManualForm = () => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.manualWrap}>
-      <Text style={styles.manualTitle}>Vincular mesa manualmente</Text>
+      <Text style={styles.manualTitle}>Entrar na mesa</Text>
+
+      <TouchableOpacity
+        style={styles.cameraButton}
+        onPress={() => {
+          setScanned(false);
+          setManualError(null);
+          setUseCamera(true);
+        }}>
+        <ScanLine size={22} color="#fff" />
+        <Text style={styles.cameraButtonText}>Escanear QR Code com a câmera</Text>
+      </TouchableOpacity>
+
+      <View style={styles.dividerRow}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>ou digite o código</Text>
+        <View style={styles.dividerLine} />
+      </View>
+
       <Text style={styles.manualHint}>
-        Cole o link do QR Code da mesa (ex.: https://seudominio.com/mesa/12) ou digite apenas o número da mesa.
+        Sem câmera? Digite o código impresso logo abaixo do QR Code da sua mesa. Todos que usarem o mesmo código entram na mesma mesa.
       </Text>
       <TextInput
         style={styles.manualInput}
-        value={manualValue}
-        onChangeText={(value) => { setManualValue(value); setManualError(null); }}
-        placeholder="Ex.: 12 ou o link completo"
-        placeholderTextColor="#999"
-        autoCapitalize="none"
+        value={formatTableCode(manualValue)}
+        onChangeText={(value) => {
+          setManualValue(normalizeTableCode(value).slice(0, TABLE_CODE_LENGTH));
+          setManualError(null);
+        }}
+        placeholder="K7Q-4MX"
+        placeholderTextColor="#B5B0A9"
+        autoCapitalize="characters"
         autoCorrect={false}
+        autoComplete="off"
+        maxLength={TABLE_CODE_LENGTH + 1}
         onSubmitEditing={submitManual}
       />
       {manualError ? <Text style={styles.manualError}>{manualError}</Text> : null}
-      <TouchableOpacity style={styles.manualButton} onPress={submitManual}>
-        <Text style={styles.manualButtonText}>Vincular mesa</Text>
+      <TouchableOpacity style={[styles.manualButton, busy && { opacity: 0.6 }]} onPress={submitManual} disabled={busy}>
+        <Text style={styles.manualButtonText}>{busy ? 'Entrando…' : 'Entrar na mesa'}</Text>
       </TouchableOpacity>
-      {!isWeb && (
-        <TouchableOpacity style={styles.manualSwitch} onPress={() => setUseCamera(true)}>
-          <Text style={styles.manualSwitchText}>Usar a câmera para escanear</Text>
-        </TouchableOpacity>
-      )}
       <View style={{ marginTop: 14 }}>
         <Button onPress={onClose} title="Fechar" color="#333" />
       </View>
@@ -88,7 +110,7 @@ export default function Scanner({ onCodeRead, onClose }: ScannerProps) {
         </Text>
         <Button onPress={requestPermission} title="Conceder Permissão" />
         <TouchableOpacity style={{ marginTop: 16 }} onPress={() => setUseCamera(false)}>
-          <Text style={styles.manualSwitchText}>Prefiro digitar o número da mesa</Text>
+          <Text style={styles.manualSwitchText}>Prefiro digitar o código da mesa</Text>
         </TouchableOpacity>
         <View style={{ marginTop: 10 }}>
           <Button onPress={onClose} title="Cancelar" color="#ff4444" />
@@ -97,9 +119,14 @@ export default function Scanner({ onCodeRead, onClose }: ScannerProps) {
     );
   }
 
-  const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
+  const handleBarCodeScanned = async ({ data }: BarcodeScanningResult) => {
     setScanned(true);
-    onCodeRead(data); // Envia o dado escaneado para o componente pai
+    const error = await onCodeRead(data); // Envia o dado escaneado para o componente pai
+    if (error) {
+      // QR de outro lugar / código inválido: avisa e volta para a câmera.
+      setManualError(error);
+      setUseCamera(false);
+    }
   };
 
   return (
@@ -118,7 +145,7 @@ export default function Scanner({ onCodeRead, onClose }: ScannerProps) {
         <View style={styles.scanTarget} />
 
         <TouchableOpacity style={styles.manualLink} onPress={() => setUseCamera(false)}>
-          <Text style={styles.manualLinkText}>Não consigo escanear — digitar o número da mesa</Text>
+          <Text style={styles.manualLinkText}>Sem câmera? Digite o código abaixo do QR Code</Text>
         </TouchableOpacity>
 
         <View style={styles.buttonContainer}>
@@ -199,7 +226,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 15,
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: 6,
+    textAlign: 'center',
     color: '#1A1A1A',
   },
   manualError: {
@@ -218,6 +248,37 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: 'bold',
+  },
+  cameraButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#6344FF',
+    borderRadius: 12,
+    paddingVertical: 16,
+    marginTop: 8,
+  },
+  cameraButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginVertical: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E0DDD6',
+  },
+  dividerText: {
+    fontSize: 12,
+    color: '#7A7571',
+    fontWeight: '600',
   },
   manualSwitch: {
     marginTop: 16,

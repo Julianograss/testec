@@ -44,6 +44,7 @@ import {
 } from '../controller/CatalogController';
 import { authApi, reportsApi } from '../services/api';
 import { useDashboard, useReports } from '../controller/ReportsController';
+import TableQrModal from '../components/tableQrModal';
 
 const COLORS = {
   background: '#F7F4F0', white: '#FFFFFF', dark: '#2A2421', primary: '#C84325',
@@ -83,6 +84,7 @@ export default function adminView({ navigation }: any) {
   const [advancedFromDate, setAdvancedFromDate] = useState('');
   const [advancedToDate, setAdvancedToDate] = useState('');
   const [detailOrder, setDetailOrder] = useState<any | null>(null);
+  const [qrTable, setQrTable] = useState<string | null>(null);
   const [tableAction, setTableAction] = useState<{ type: 'manage' | 'close' | 'split' | 'receive'; table: any } | null>(null);
   const [paymentMethod, setPaymentMethod] = useState('Pix');
   const [receivedAmount, setReceivedAmount] = useState('');
@@ -321,7 +323,7 @@ export default function adminView({ navigation }: any) {
       </View>
       <View style={styles.statusTabsWrapper}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusTabsContainer}>
-          {['Todos', 'Recebido', 'Em preparo', 'Pronto', 'Entregue', 'Cancelado'].map((status) => (
+          {['Todos', 'Aguardando', 'Recebido', 'Em preparo', 'Pronto', 'Entregue', 'Cancelado'].map((status) => (
             <TouchableOpacity key={status} onPress={() => setOrderStatusFilter(status)} style={[styles.statusPill, orderStatusFilter === status && styles.statusPillActive]}>
               <Text style={[styles.statusPillText, orderStatusFilter === status && styles.statusPillTextActive]}>{status}</Text>
             </TouchableOpacity>
@@ -479,6 +481,7 @@ export default function adminView({ navigation }: any) {
                   )}
                 </View>
                 <View style={styles.tableFooter}>
+                  <TouchableOpacity style={[styles.secondaryButton, { marginTop: 0, marginBottom: 8 }]} onPress={() => setQrTable(table.number)}><QrCode color={COLORS.textMain} size={16} /><Text style={styles.secondaryButtonText}>QR Code da mesa</Text></TouchableOpacity>
                   {table.status === 'Livre' && (<TouchableOpacity style={styles.actionBtnPrimary} onPress={() => updateTable(table.id, { status: 'Ocupada', waiter: 'Admin' })}><Text style={styles.actionBtnPrimaryText}>Abrir Mesa</Text></TouchableOpacity>)}
                   {table.status === 'Reservada' && (<TouchableOpacity style={styles.actionBtnOutline} onPress={() => updateTable(table.id, { status: 'Livre', waiter: null })}><Text style={styles.actionBtnOutlineText}>Cancelar Reserva</Text></TouchableOpacity>)}
                   {table.status === 'Ocupada' && (
@@ -744,6 +747,7 @@ export default function adminView({ navigation }: any) {
           <View style={styles.modalOverlay}><View style={styles.formModal}><View style={styles.modalHeader}><Text style={styles.modalTitle}>Filtros avançados</Text><TouchableOpacity onPress={() => setAdvancedFilterOpen(false)}><Text style={styles.modalClose}>×</Text></TouchableOpacity></View><Text style={styles.modalLabel}>Preço mínimo (cardápio)</Text><TextInput style={styles.modalInput} value={advancedMinPrice} onChangeText={value => setAdvancedMinPrice(value.replace(/[^0-9,\.]/g, ''))} keyboardType="decimal-pad" placeholder="Ex.: 20,00" placeholderTextColor={COLORS.textMuted}/><Text style={styles.modalLabel}>Preço máximo (cardápio)</Text><TextInput style={styles.modalInput} value={advancedMaxPrice} onChangeText={value => setAdvancedMaxPrice(value.replace(/[^0-9,\.]/g, ''))} keyboardType="decimal-pad" placeholder="Ex.: 80,00" placeholderTextColor={COLORS.textMuted}/><Text style={styles.modalLabel}>Data inicial dos pedidos (AAAA-MM-DD)</Text><TextInput style={styles.modalInput} value={advancedFromDate} onChangeText={setAdvancedFromDate} placeholder="2026-09-01" placeholderTextColor={COLORS.textMuted}/><Text style={styles.modalLabel}>Data final dos pedidos (AAAA-MM-DD)</Text><TextInput style={styles.modalInput} value={advancedToDate} onChangeText={setAdvancedToDate} placeholder="2026-09-30" placeholderTextColor={COLORS.textMuted}/><View style={styles.modalActions}><TouchableOpacity style={styles.modalCancel} onPress={() => { setAdvancedMinPrice(''); setAdvancedMaxPrice(''); setAdvancedFromDate(''); setAdvancedToDate(''); }}><Text>Limpar</Text></TouchableOpacity><TouchableOpacity style={styles.modalSave} onPress={() => setAdvancedFilterOpen(false)}><Text style={styles.modalSaveText}>Aplicar filtros</Text></TouchableOpacity></View></View></View>
         </Modal>
       </View>
+      <TableQrModal visible={!!qrTable} tableNumber={qrTable} onClose={() => setQrTable(null)} />
     </SafeAreaView>
   );
 }

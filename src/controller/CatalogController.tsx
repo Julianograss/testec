@@ -13,6 +13,7 @@
  */
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect } from 'react';
 import { Alert } from '../utils/alert';
+import { useAuth } from './AuthController';
 import { PRODUCTS, CATEGORIES, TABLES, STAFF, RESTAURANT } from '../data/demoData';
 import { productsApi, categoriesApi, tablesApi, staffApi, settingsApi } from '../services/api';
 import { isValidPrice, isValidPhone, isValidCpf, isTableNumberTaken } from '../utils/validators';
@@ -115,20 +116,31 @@ export const CatalogProvider = ({ children }) => {
   const [settings, setSettings] = useState(loadSettings);
   const [savingSettings, setSavingSettings] = useState(false);
 
+  const { user } = useAuth();
+
+  // Carrega do banco. Cada lista é independente: se uma falhar (ex.: a equipe
+  // só pode ser lida por administradores), as outras continuam funcionando.
+  // Recarrega quando o usuário entra ou sai, porque as permissões mudam.
   useEffect(() => {
     let mounted = true;
-    Promise.all([productsApi.list(), categoriesApi.list(), tablesApi.list(), staffApi.list(), settingsApi.get()])
-      .then(([loadedProducts, loadedCategories, loadedTables, loadedStaff, loadedSettings]) => {
-        if (!mounted) return;
-        if (Array.isArray(loadedProducts)) setProducts(loadedProducts);
-        if (Array.isArray(loadedCategories)) setCategories(loadedCategories);
-        if (Array.isArray(loadedTables)) setTables(loadedTables);
-        if (Array.isArray(loadedStaff)) setStaff(loadedStaff);
-        if (loadedSettings) setSettings(loadedSettings);
-      })
-      .catch(error => reportApiError('carregar os dados', error));
+    const apply = (result, setter, label) => {
+      if (!mounted) return;
+      if (result.status === 'fulfilled') {
+        if (Array.isArray(result.value)) setter(result.value);
+      } else {
+        console.warn(`[Catalog] falha ao carregar ${label}:`, result.reason?.message);
+      }
+    };
+    Promise.allSettled([productsApi.list(), categoriesApi.list(), tablesApi.list(), staffApi.list(), settingsApi.get()])
+      .then(([prod, cats, tabs, team, sett]) => {
+        apply(prod, setProducts, 'produtos');
+        apply(cats, setCategories, 'categorias');
+        apply(tabs, setTables, 'mesas');
+        apply(team, setStaff, 'equipe');
+        if (mounted && sett.status === 'fulfilled' && sett.value) setSettings(sett.value);
+      });
     return () => { mounted = false; };
-  }, []);
+  }, [user?.id]);
 
   // A contagem de itens por categoria é calculada, não digitada.
   const categories = useMemo(

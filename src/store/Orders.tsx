@@ -16,7 +16,7 @@ import { onTablesChange } from '../services/realtime';
 /* ==========================================
    TIPOS
 ========================================== */
-export type OrderStatus = 'Recebido' | 'Em preparo' | 'Pronto' | 'Entregue' | 'Cancelado';
+export type OrderStatus = 'Aguardando' | 'Recebido' | 'Em preparo' | 'Pronto' | 'Entregue' | 'Cancelado';
 export type OrderType = 'Local' | 'Delivery' | 'Retirada';
 export type OrderItem = { name: string; qty: number; price: number };
 
@@ -51,7 +51,7 @@ export type OrderView = Order & {
   time: string;
 };
 
-export const ORDER_FLOW: OrderStatus[] = ['Recebido', 'Em preparo', 'Pronto', 'Entregue'];
+export const ORDER_FLOW: OrderStatus[] = ['Aguardando', 'Recebido', 'Em preparo', 'Pronto', 'Entregue'];
 
 export const KITCHEN_COLUMNS = {
   queue: 'Recebido' as OrderStatus,
@@ -114,7 +114,7 @@ const fromRow = (row: any): Order =>
     uuid: row.id,
     type: row.type,
     customer: row.customer_name || 'Balcão',
-    table: row.tables?.number != null ? String(row.tables.number) : null,
+    table: row.tables?.number != null ? String(row.tables.number).padStart(2, '0') : null,
     attendant: row.attendant_name || null,
     payment: row.payment_method || 'Não informado',
     status: row.status,
@@ -207,6 +207,7 @@ const reportError = (action: string, message?: string) =>
 const stamp = (order: Order, status: OrderStatus): Order => {
   const now = Date.now();
   switch (status) {
+    case 'Aguardando':
     case 'Recebido':
       return { ...order, status, startedAt: null, readyAt: null, closedAt: null };
     case 'Em preparo':
@@ -221,27 +222,60 @@ const stamp = (order: Order, status: OrderStatus): Order => {
   }
 };
 
+// Aguarda o INSERT de pedidos recentes antes de persistir mudanças de status.
+const pendingSaves = new Map<string, Promise<boolean>>();
+
 export const updateOrderStatus = (id: string, status: OrderStatus) => {
   const current = state.find(order => order.id === id);
   if (!current) return;
   const next = stamp(current, status);
   commit(state.map(order => (order.id === id ? next : order))); // otimista
 
-  void supabase
-    .from('orders')
-    .update({
-      status: next.status,
-      started_at: iso(next.startedAt),
-      ready_at: iso(next.readyAt),
-      closed_at: iso(next.closedAt),
-    })
-    .eq('id', current.uuid)
-    .then(({ error }) => {
-      if (error) {
-        reportError('atualizar o pedido', error.message);
-        void reloadOrders();
-      }
-    });
+  const waitSave = pendingSaves.get(current.uuid);
+
+  const run = async () => {
+    if (waitSave) {
+      const saved = await waitSave;
+      if (!saved) return;
+    }
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        status: next.status,
+        started_at: iso(next.startedAt),
+        ready_at: iso(next.readyAt),
+        closed_at: iso(next.closedAt),
+      })
+      .eq('id', current.uuid)
+      .select('id');
+
+    if (error) {
+      reportError('atualizar o pedido', error.message);
+      void reloadOrders();
+      return;
+    }
+    if (!data || data.length === 0) {
+      reportError('atualizar o pedido', 'Sem permissão para alterar este pedido ou ele não existe mais.');
+      void reloadOrders();
+      return;
+    }
+    if (waitSave) void reloadOrders();
+  };
+  void run();
+};
+
+/** Envia o pedido (status Aguardando) para a fila da cozinha (status Recebido). */
+export const sendToKitchen = (id: string) => {
+  const order = state.find(item => item.id === id);
+  if (!order || order.status !== 'Aguardando') return;
+  updateOrderStatus(id, 'Recebido');
+};
+
+/** Envia todos os pedidos que estão aguardando de uma vez. */
+export const sendAllToKitchen = () => {
+  state
+    .filter(order => order.status === 'Aguardando')
+    .forEach(order => updateOrderStatus(order.id, 'Recebido'));
 };
 
 export const advanceOrder = (id: string) => {
@@ -310,18 +344,27 @@ export const addOrder = (input: Partial<Order> & { itemList: OrderItem[] }) => {
     id: `tmp-${uuid.slice(0, 4)}`,
     type: 'Local',
     customer: 'Balcão',
+    // O pedido nasce no salão e aguarda o envio para a cozinha
+    status: 'Aguardando', 
     createdAt: Date.now(),
     ...input,
     uuid,
   });
-  commit([...state, order]); // aparece na hora; o Realtime troca pelo registro oficial
+  
+  commit([...state, order]); 
 
-  void persistNewOrder(order)
-    .then(() => reloadOrders())
+  const save = persistNewOrder(order)
+    .then(() => true)
     .catch((error: any) => {
       reportError('enviar o pedido', error?.message);
-      void reloadOrders();
+      return false;
+    })
+    .then(async ok => {
+      await reloadOrders();
+      return ok;
     });
+  pendingSaves.set(uuid, save);
+  void save.finally(() => pendingSaves.delete(uuid));
   return order;
 };
 
@@ -388,6 +431,8 @@ export function useOrders() {
     advanceOrder,
     revertOrder,
     cancelOrder,
+    sendToKitchen,
+    sendAllToKitchen,
     addOrder,
     removeOrder,
     payTable,

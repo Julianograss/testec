@@ -34,8 +34,7 @@ import {
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import Scanner from './scannerView';
 import { SideMenu } from '../components/sideMenu';
-import { useTableSession } from '../store/table-session';
-import { getTableNumberFromLink } from '../utils/tableLinks';
+import { useTableSession, useTableOrders } from '../store/table-session';
 import { useAuth } from '../controller/AuthController';
 import { getOrdersForUser, useOrders } from '../store/Orders';
 import { useFavorites } from '../store/Favorites';
@@ -146,7 +145,8 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
   
   // Estado para controlar a abertura/fechamento do menu lateral
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { tableNumber, sessionActive, openTableSession, closeTableSession } = useTableSession();
+  const { tableNumber, tableCode, sessionActive, joinTable, closeTableSession, endedNotice, dismissEndedNotice } = useTableSession();
+  const { orders: tableOrders, total: tableTotal } = useTableOrders();
   const { user, logout, updateProfile, changePassword } = useAuth();
   const { orders } = useOrders();
   const { favorites, toggleFavorite } = useFavorites();
@@ -157,14 +157,19 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
     if (user) setAccountForm(current => ({ ...current, name: user.name, email: user.email, address: user.address || '' }));
   }, [user]);
 
+  // Link do QR Code (/mesa/CODIGO): entra na mesa automaticamente.
+  const routeCode = route?.params?.tableCode;
   useEffect(() => {
-    const routeTable = route?.params?.tableNumber;
-    if (routeTable) {
-      openTableSession(String(routeTable), 'qr');
-      setScannedResult(String(routeTable));
-      setServiceMode('local');
-    }
-  }, [route?.params?.tableNumber]);
+    if (!routeCode) return;
+    joinTable(String(routeCode), 'qr').then(result => {
+      if ('error' in result) {
+        Alert.alert('Não foi possível entrar na mesa', result.error);
+      } else {
+        setScannedResult(result.number);
+        setServiceMode('local');
+      }
+    });
+  }, [routeCode]);
 
   const menu = menuByService[serviceMode];
 
@@ -190,17 +195,15 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
     catch (error: any) { Alert.alert('Não foi possível alterar', error?.message || 'Tente novamente.'); }
   };
 
-  const handleScanSuccess = (data: string) => {
+  // Devolve a mensagem de erro (para o scanner mostrar) ou null quando entrou na mesa.
+  const handleScanSuccess = async (data: string): Promise<string | null> => {
+    const result = await joinTable(data, 'qr');
+    if ('error' in result) return result.error;
     setShowScanner(false);
-    const table = getTableNumberFromLink(data);
-    if (!table) {
-      Alert.alert('QR Code inválido', 'Use um QR Code no formato https://seu-projeto.vercel.app/mesa/12.');
-      return;
-    }
-    openTableSession(table, 'qr');
-    setScannedResult(table);
+    setScannedResult(result.number);
     setServiceMode('local');
-    Alert.alert('Mesa identificada', `Pedido vinculado à mesa ${table}. Delivery foi bloqueado.`);
+    Alert.alert('Você entrou na mesa', `Mesa ${result.number}. Os pedidos de todos os aparelhos desta mesa ficam na mesma conta.`);
+    return null;
   };
 
   const handleScannerOpen = () => {
@@ -208,7 +211,7 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
   };
 
   const handleLeaveTable = () => {
-    Alert.alert('Sair da mesa', 'Deseja desvincular este atendimento da mesa? Novos pedidos deixarão de ser enviados para ela.', [
+    Alert.alert('Sair da mesa', 'Deseja sair desta mesa neste aparelho? Os outros aparelhos continuam na mesa e os pedidos já feitos permanecem na conta.', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Sair da mesa',
@@ -221,7 +224,7 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
     ]);
   };
 
-  const displayTable = tableNumber || scannedResult;
+  const displayTable = tableNumber;
   const displayTablePadded = displayTable ? String(displayTable).padStart(2, '0') : null;
 
   const handleCategory = (categoryTitle: string) => {
@@ -258,12 +261,12 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
               <View style={{ flex: 1 }}>
                 <Text style={styles.qrTag}>COMECE POR AQUI</Text>
                 <Text style={styles.qrTitle}>
-                  {displayTablePadded ? `Mesa: ${displayTablePadded}` : 'Escaneie sua mesa'}
+                  {displayTablePadded ? `Mesa: ${displayTablePadded}` : 'Escaneie ou digite o código'}
                 </Text>
                 <Text style={styles.qrSub}>
                   {displayTablePadded
                     ? 'Seu atendimento já está personalizado para este local.'
-                    : 'Use o QR code da mesa para personalizar seu atendimento.'}
+                    : 'Leia o QR Code da mesa ou digite o código impresso abaixo dele.'}
                 </Text>
                 {displayTablePadded ? (
                   <Pressable onPress={handleLeaveTable} style={{ marginTop: 6 }}>
@@ -276,6 +279,35 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
               </Pressable>
             </View>
           </View>
+
+          {endedNotice ? (
+            <Pressable style={styles.tableNotice} onPress={dismissEndedNotice}>
+              <Text style={styles.tableNoticeText}>{endedNotice}</Text>
+              <Text style={styles.tableNoticeClose}>Entendi</Text>
+            </Pressable>
+          ) : null}
+
+          {sessionActive && tableOrders.length > 0 ? (
+            <View style={styles.tableBill}>
+              <Text style={styles.tableBillTitle}>Pedidos da mesa {displayTablePadded}</Text>
+              <Text style={styles.tableBillSub}>Todos os aparelhos desta mesa veem a mesma conta.</Text>
+              {tableOrders.map(order => (
+                <View key={order.number} style={styles.tableBillRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.tableBillItems} numberOfLines={2}>{order.items}</Text>
+                    <Text style={styles.tableBillMeta}>
+                      #{order.number} · {order.status === 'Aguardando' ? 'Aguardando confirmação' : order.status}
+                    </Text>
+                  </View>
+                  <Text style={styles.tableBillValue}>R$ {order.total.toFixed(2).replace('.', ',')}</Text>
+                </View>
+              ))}
+              <View style={styles.tableBillTotalRow}>
+                <Text style={styles.tableBillTotalLabel}>Total da mesa</Text>
+                <Text style={styles.tableBillTotalValue}>R$ {tableTotal.toFixed(2).replace('.', ',')}</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.tabsContainer}>
@@ -364,7 +396,7 @@ export default function HomeScreen({ navigation, route }: Partial<Props> & { rou
             <Text style={styles.infoText}>
               {displayTablePadded
                 ? `Pedidos feitos agora vão direto para a Mesa ${displayTablePadded}.`
-                : 'Escaneie o QR Code da sua mesa para vincular o pedido a ela, ou peça para retirada/entrega.'}
+                : 'Escaneie o QR Code da sua mesa (ou digite o código abaixo dele) para vincular o pedido, ou peça para retirada/entrega.'}
             </Text>
           </View>
         </View>
@@ -631,4 +663,17 @@ const styles = StyleSheet.create({
     color: '#27272a',
     lineHeight: 18,
   },
+  tableNotice: { marginTop: 12, backgroundColor: '#FFF3E0', borderRadius: 12, padding: 14, gap: 6 },
+  tableNoticeText: { fontSize: 13, color: '#E65100', fontWeight: '600' },
+  tableNoticeClose: { fontSize: 13, color: '#E65100', fontWeight: '800', alignSelf: 'flex-end' },
+  tableBill: { marginTop: 12, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E4E4E7', padding: 16, gap: 10 },
+  tableBillTitle: { fontSize: 15, fontWeight: '800', color: '#1A1A1A' },
+  tableBillSub: { fontSize: 12, color: '#71717a', marginTop: -6 },
+  tableBillRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  tableBillItems: { fontSize: 13, color: '#1A1A1A', fontWeight: '600' },
+  tableBillMeta: { fontSize: 11, color: '#71717a', marginTop: 2 },
+  tableBillValue: { fontSize: 13, fontWeight: '700', color: '#1A1A1A' },
+  tableBillTotalRow: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#EBE8E2', paddingTop: 10 },
+  tableBillTotalLabel: { fontSize: 14, fontWeight: '800', color: '#1A1A1A' },
+  tableBillTotalValue: { fontSize: 16, fontWeight: '800', color: '#1A1A1A' },
 });

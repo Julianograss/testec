@@ -22,29 +22,28 @@ import {
   Plus,
   Minus,
   X,
+  Send,
 } from 'lucide-react-native';
 import { useAuth } from '../controller/AuthController';
 import { useCatalog } from '../controller/CatalogController';
-import { useOrders, formatMoney, formatElapsed, OrderView } from '../store/Orders';
+import { useOrders, formatMoney, formatElapsed, isUnpaid, OrderView } from '../store/Orders';
 import { useCalls } from '../store/Calls';
 
 const COLORS = {
-  background: '#F7F4F0', // Fundo bege claro
+  background: '#F7F4F0',
   white: '#FFFFFF',
-  dark: '#2A2421',       // Marrom escuro da central de atenção
-  primary: '#C84325',    // Vermelho/Laranja dos botões
+  dark: '#2A2421',
+  primary: '#C84325',
   primaryHover: '#A6331A',
   grayLight: '#EBE8E2',
-  grayCardBg: '#F3F1EC', // Fundo dos cards de pedidos
+  grayCardBg: '#F3F1EC',
   border: '#E0DDD6',
   textMain: '#1A1A1A',
   textMuted: '#7A7571',
-
-  // Cores de Status das Mesas
-  statusLivre: '#E0E0E0',     // Cinza
-  statusOcupada: '#2E7D32',   // Verde
-  statusAguardando: '#F57F17', // Amarelo
-  statusChamado: '#C62828',    // Vermelho
+  statusLivre: '#E0E0E0',
+  statusOcupada: '#2E7D32',
+  statusAguardando: '#F57F17',
+  statusChamado: '#C62828',
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -57,8 +56,17 @@ const STATUS_COLORS: Record<string, string> = {
 
 const ORDER_TYPES = ['Local', 'Delivery', 'Retirada'] as const;
 
-/** Converte o preço do cardápio ("54,90") para número. */
 const parsePrice = (price: string) => Number(String(price).replace(/\./g, '').replace(',', '.')) || 0;
+
+const statusLabel = (status: string) => {
+  switch (status) {
+    case 'Aguardando': return 'Aguardando envio à cozinha';
+    case 'Recebido': return 'Na fila da cozinha';
+    case 'Em preparo': return 'Em preparo na cozinha';
+    case 'Pronto': return 'Pronto pela cozinha';
+    default: return status;
+  }
+};
 
 const isActive = (order: OrderView) => order.status !== 'Entregue' && order.status !== 'Cancelado';
 
@@ -77,11 +85,10 @@ const emptyComposer: Composer = { type: 'Local', customer: '', table: '', items:
 
 export default function AttendantDashboardScreen({ navigation }: Props) {
   const { user, logout } = useAuth();
-  const { orders, addOrder, updateOrderStatus, cancelOrder } = useOrders();
+  const { orders, addOrder, updateOrderStatus, cancelOrder, sendToKitchen, sendAllToKitchen } = useOrders();
   const { pending: calls, resolveCall } = useCalls();
   const { tables, activeProducts } = useCatalog();
 
-  // Relógio da tela: mantém os tempos dos chamados e dos pedidos atualizados.
   const [now, setNow] = useState<number>(Date.now());
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 10 * 1000);
@@ -90,13 +97,17 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
 
   const [composer, setComposer] = useState<Composer | null>(null);
 
-  /* ==========================================
-     DADOS DERIVADOS
-  ========================================== */
   const activeOrders = useMemo(
-    () => orders.filter(isActive).sort((a, b) => a.createdAt - b.createdAt),
+    () =>
+      orders.filter(isActive).sort((a, b) => {
+        const aWaiting = a.status === 'Aguardando' ? 0 : 1;
+        const bWaiting = b.status === 'Aguardando' ? 0 : 1;
+        return aWaiting - bWaiting || a.createdAt - b.createdAt;
+      }),
     [orders],
   );
+  
+  const waitingOrders = useMemo(() => activeOrders.filter(order => order.status === 'Aguardando'), [activeOrders]);
 
   const kpis = useMemo(() => {
     const startOfToday = new Date().setHours(0, 0, 0, 0);
@@ -109,7 +120,7 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
 
     return {
       openOrders: activeOrders.length,
-      readyLabel: `${ready.length} aguardando despacho`,
+      readyLabel: `${waitingOrders.length} p/ enviar à cozinha · ${ready.length} pronto(s)`,
       calls: calls.length,
       callLabel: oldestCall
         ? `Mesa ${oldestCall.table} há ${formatElapsed(oldestCall.createdAt, now)}`
@@ -119,27 +130,22 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
         ? `${readyDelivery} pronto(s) para sair`
         : 'Nenhum pronto para sair',
     };
-  }, [activeOrders, orders, calls, now]);
+  }, [activeOrders, waitingOrders, orders, calls, now]);
 
   const tableCards = useMemo(
     () =>
       tables.map(table => {
-        const call = calls.find(item => item.table === table.number);
-        const open = activeOrders.filter(order => order.table === table.number);
+        const call = calls.find(item => String(item.table) === String(table.number));
+        const open = orders.filter(order => String(order.table) === String(table.number) && isUnpaid(order));
         const total = open.reduce((sum, order) => sum + order.totalValue, 0);
         const status = call ? 'Chamar garçom' : open.length > 0 ? 'Ocupada' : table.status;
 
         return { ...table, status, call, open, total, color: STATUS_COLORS[status] || COLORS.statusLivre };
       }),
-    [tables, calls, activeOrders],
+    [tables, calls, orders],
   );
 
-  /* ==========================================
-     AÇÕES
-  ========================================== */
   const handleLogout = useCallback(() => {
-    // No Expo Web, os callbacks dos botões de Alert podem não ser executados.
-    // O botão Sair deve sempre limpar a sessão e retornar ao login.
     logout();
     navigation.replace('loginView');
   }, [logout, navigation]);
@@ -147,14 +153,16 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
   const dispatchOrder = useCallback(
     (order: OrderView) => {
       const label =
+        order.type === 'Delivery' ? 'Chamar motoboy' : order.type === 'Retirada' ? 'Entregar ao cliente' : 'Chamar garçom';
+      const question =
         order.type === 'Delivery'
-          ? 'Chamar motoboy'
+          ? `Chamar o motoboy para a saída do pedido #${order.id}?`
           : order.type === 'Retirada'
-          ? 'Entregar no balcão'
-          : 'Entregar na mesa';
-      Alert.alert(label, `Confirmar a saída do pedido #${order.id}?`, [
+            ? `Pedido #${order.id} entregue ao cliente no balcão?`
+            : `Chamar o garçom para retirar o pedido #${order.id}?`;
+      Alert.alert(label, question, [
         { text: 'Agora não', style: 'cancel' },
-        { text: 'Confirmar', onPress: () => updateOrderStatus(order.id, 'Entregue') },
+        { text: 'Sim', onPress: () => updateOrderStatus(order.id, 'Entregue') },
       ]);
     },
     [updateOrderStatus],
@@ -168,6 +176,20 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
       ]);
     },
     [cancelOrder],
+  );
+
+  const confirmSendToKitchen = useCallback(
+    (orderId: string) => {
+      Alert.alert(
+        'Enviar para a Cozinha',
+        `Deseja enviar o pedido #${orderId} para a fila de preparo da cozinha?`,
+        [
+          { text: 'Não', style: 'cancel' },
+          { text: 'Sim, enviar', onPress: () => sendToKitchen(orderId) },
+        ]
+      );
+    },
+    [sendToKitchen]
   );
 
   const handleTablePress = useCallback(
@@ -196,14 +218,16 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
         return;
       }
 
+      if (table.status === 'Reservada') {
+        Alert.alert('Mesa Reservada', 'Esta mesa está reservada e não pode receber novos pedidos no momento.');
+        return;
+      }
+
       setComposer({ ...emptyComposer, table: table.number, customer: `Mesa ${table.number}` });
     },
     [resolveCall],
   );
 
-  /* ==========================================
-     NOVO PEDIDO
-  ========================================== */
   const composerItems = useMemo(() => {
     if (!composer) return [];
     return activeProducts
@@ -232,31 +256,38 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
     if (composerItems.length === 0) {
       return Alert.alert('Pedido vazio', 'Adicione pelo menos um item ao pedido.');
     }
-    const customer = composer.customer.trim() || (composer.table ? `Mesa ${composer.table}` : 'Balcão');
+    const isLocal = composer.type === 'Local';
+    const tableNumber = composer.table.trim().padStart(2, '0');
+
+    if (isLocal) {
+      if (!composer.table.trim()) {
+        return Alert.alert('Informe a mesa', 'Pedidos locais precisam de uma mesa.');
+      }
+      if (!tables.some((table: any) => table.number === tableNumber)) {
+        return Alert.alert('Mesa não encontrada', `A mesa ${tableNumber} não está cadastrada.`);
+      }
+    }
+
+    const customer = composer.customer.trim() || (isLocal ? `Mesa ${tableNumber}` : 'Balcão');
 
     addOrder({
       type: composer.type,
       customer,
-      table: composer.type === 'Local' ? composer.table.trim() || null : null,
+      table: isLocal ? tableNumber : null,
       attendant: user?.name || null,
       payment: 'A definir',
+      status: 'Recebido',
       itemList: composerItems,
     });
 
     setComposer(null);
-    Alert.alert('Pedido enviado', 'O pedido já aparece na fila da cozinha.');
+    Alert.alert('Pedido enviado', 'O pedido já está na fila da cozinha.');
   };
 
-  /* ==========================================
-     RENDER
-  ========================================== */
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
-        {/* ==========================================
-            CABEÇALHO
-        ========================================== */}
         <View style={styles.header}>
           <View>
             <View style={styles.logoRow}>
@@ -273,12 +304,7 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        {/* ==========================================
-            INDICADORES (Esquerda) + CENTRAL (Direita)
-        ========================================== */}
         <View style={styles.topSectionRow}>
-
-          {/* COLUNA ESQUERDA: Cards Empilhados */}
           <View style={styles.kpiColumn}>
             <View style={styles.kpiCard}>
               <View style={styles.kpiHeader}>
@@ -308,7 +334,6 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
             </View>
           </View>
 
-          {/* COLUNA DIREITA: Central de Atenção */}
           <View style={styles.attentionPanel}>
             <View style={styles.attentionHeader}>
               <View>
@@ -359,12 +384,8 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
               <Text style={styles.attentionButtonText}>Abrir rota de delivery</Text>
             </TouchableOpacity>
           </View>
-
         </View>
 
-        {/* ==========================================
-            MAPA DE MESAS
-        ========================================== */}
         <View style={styles.fullWidthSection}>
           <View style={styles.sectionHeader}>
             <View>
@@ -384,9 +405,6 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
                 <View style={[styles.tableDot, { backgroundColor: table.color }]} />
                 <Text style={styles.tableNumber}>Mesa {table.number}</Text>
                 <Text style={styles.tableStatus}>{table.status}</Text>
-                {table.total > 0 && (
-                  <Text style={styles.tableTotal}>R$ {formatMoney(table.total)}</Text>
-                )}
               </TouchableOpacity>
             ))}
           </View>
@@ -399,9 +417,6 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
           </View>
         </View>
 
-        {/* ==========================================
-            CENTRAL DE PEDIDOS
-        ========================================== */}
         <View style={styles.fullWidthSection}>
           <View style={styles.sectionHeader}>
             <View>
@@ -418,6 +433,15 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
             <Text style={styles.newOrderButtonText}>Novo pedido</Text>
           </TouchableOpacity>
 
+          {waitingOrders.length > 0 && (
+            <TouchableOpacity style={styles.sendAllButton} onPress={sendAllToKitchen}>
+              <Send color={COLORS.primary} size={16} />
+              <Text style={styles.sendAllButtonText}>
+                Enviar {waitingOrders.length} pedido(s) para a cozinha
+              </Text>
+            </TouchableOpacity>
+          )}
+
           {activeOrders.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateText}>Nenhum pedido em aberto agora.</Text>
@@ -425,7 +449,7 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
           ) : (
             <View style={styles.ordersGrid}>
               {activeOrders.map(order => (
-                <View key={order.id} style={styles.orderCard}>
+                <View key={order.id} style={[styles.orderCard, order.status === 'Aguardando' && styles.orderCardWaiting]}>
                   <View style={styles.orderHeader}>
                     <Text style={styles.orderId}>#{order.id}</Text>
                     <View style={[styles.orderTypeBadge, order.type === 'Delivery' && styles.orderTypeDelivery]}>
@@ -442,27 +466,35 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
                   </Text>
 
                   <View style={styles.orderFooter}>
-                    <View style={[styles.orderStatusBadge, order.status === 'Pronto' && styles.orderStatusReady]}>
-                      <Text style={[styles.orderStatusText, order.status === 'Pronto' && styles.orderStatusReadyText]}>{order.status === 'Pronto' ? 'Pronto pela cozinha' : order.status === 'Em preparo' ? 'Em preparo na cozinha' : order.status}</Text>
+                    <View style={[styles.orderStatusBadge, order.status === 'Pronto' && styles.orderStatusReady, order.status === 'Aguardando' && styles.orderStatusWaiting]}>
+                      <Text style={[styles.orderStatusText, order.status === 'Pronto' && styles.orderStatusReadyText, order.status === 'Aguardando' && styles.orderStatusWaitingText]}>
+                        {statusLabel(order.status)}
+                      </Text>
                     </View>
 
-                    {order.status === 'Pronto' ? (
-                      <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: COLORS.statusOcupada }]}
-                        onPress={() => dispatchOrder(order)}>
-                        <Text style={styles.actionButtonText}>
-                          {order.type === 'Delivery'
-                            ? 'Chamar motoboy'
-                            : order.type === 'Retirada'
-                            ? 'Entregar no balcão'
-                            : 'Entregar na mesa'}
-                        </Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity style={styles.linkButton} onPress={() => confirmCancel(order)}>
-                        <Text style={styles.linkButtonText}>Cancelar</Text>
-                      </TouchableOpacity>
-                    )}
+                    <View style={styles.orderActions}>
+                      {order.status !== 'Pronto' && (
+                        <TouchableOpacity style={styles.linkButton} onPress={() => confirmCancel(order)}>
+                          <Text style={styles.linkButtonText}>Cancelar</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {order.status === 'Aguardando' && (
+                        <TouchableOpacity style={styles.actionButton} onPress={() => confirmSendToKitchen(order.id)}>
+                          <Text style={styles.actionButtonText}>Enviar para a cozinha</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {order.status === 'Pronto' && (
+                        <TouchableOpacity
+                          style={[styles.actionButton, { backgroundColor: COLORS.statusOcupada }]}
+                          onPress={() => dispatchOrder(order)}>
+                          <Text style={styles.actionButtonText}>
+                            {order.type === 'Delivery' ? 'Chamar motoboy' : order.type === 'Retirada' ? 'Entregar ao cliente' : 'Chamar garçom'}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   </View>
                 </View>
               ))}
@@ -472,9 +504,6 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
 
       </ScrollView>
 
-      {/* ==========================================
-          MODAL: NOVO PEDIDO
-      ========================================== */}
       <Modal visible={!!composer} transparent animationType="slide" onRequestClose={() => setComposer(null)}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -569,15 +598,11 @@ export default function AttendantDashboardScreen({ navigation }: Props) {
   );
 }
 
-// A webview de celular também é `web`; considerar somente tablets como largos
-// evita que o atendimento force colunas lado a lado em telas estreitas.
-const isWide = Platform.OS !== 'web' && Platform.isPad;
+const isWide = Platform.OS !== 'web' && 'isPad' in Platform && Platform.isPad === true;
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
   scrollContent: { padding: 24, paddingBottom: 60 },
-
-  // --- Header ---
   header: { marginBottom: 30, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   logoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   logoIcon: { backgroundColor: COLORS.primary, padding: 4, borderRadius: 4 },
@@ -588,36 +613,14 @@ const styles = StyleSheet.create({
   greetingSubtitle: { fontSize: 14, color: COLORS.textMuted, marginTop: 4 },
   logoutButton: { backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8 },
   logoutText: { fontSize: 13, fontWeight: '600', color: COLORS.textMain },
-
-  // --- Indicadores e Central (Lado a Lado) ---
-  topSectionRow: {
-    flexDirection: isWide ? 'row' : 'column',
-    gap: 20,
-    marginBottom: 24,
-  },
-
-  // Coluna Esquerda: KPIs
+  topSectionRow: { flexDirection: isWide ? 'row' : 'column', gap: 20, marginBottom: 24 },
   kpiColumn: { flex: 1, gap: 16 },
-  kpiCard: {
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 16,
-    padding: 20,
-  },
+  kpiCard: { backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border, borderRadius: 16, padding: 20 },
   kpiHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   kpiTitle: { fontSize: 13, fontWeight: '600', color: COLORS.textMuted },
   kpiValue: { fontSize: 32, fontWeight: 'bold', color: COLORS.textMain, marginBottom: 4 },
   kpiSub: { fontSize: 12, color: COLORS.textMuted },
-
-  // Coluna Direita: Central Escura
-  attentionPanel: {
-    flex: 1.2,
-    backgroundColor: COLORS.dark,
-    borderRadius: 16,
-    padding: 20,
-    justifyContent: 'space-between',
-  },
+  attentionPanel: { flex: 1.2, backgroundColor: COLORS.dark, borderRadius: 16, padding: 20, justifyContent: 'space-between' },
   attentionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
   attentionOverline: { fontSize: 11, color: '#96908B', marginBottom: 2 },
   attentionTitle: { fontSize: 18, fontWeight: 'bold', color: COLORS.white },
@@ -627,157 +630,74 @@ const styles = StyleSheet.create({
   attentionCardTitle: { fontSize: 14, fontWeight: 'bold', color: COLORS.white },
   attentionCardTime: { fontSize: 12, color: COLORS.primary },
   attentionCardAction: { fontSize: 13, color: '#B3ACA5' },
-  attentionEmpty: {
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#4A423D',
-    borderRadius: 12,
-    padding: 16,
-  },
+  attentionEmpty: { borderWidth: 1, borderStyle: 'dashed', borderColor: '#4A423D', borderRadius: 12, padding: 16 },
   attentionEmptyText: { fontSize: 13, color: '#B3ACA5' },
   attentionButton: { backgroundColor: COLORS.grayLight, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, paddingVertical: 14, borderRadius: 8 },
   attentionButtonText: { fontSize: 14, fontWeight: 'bold', color: COLORS.textMain },
-
-  // --- Seções Full Width (Mesas e Pedidos) ---
-  fullWidthSection: {
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 24,
-  },
+  fullWidthSection: { backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border, borderRadius: 16, padding: 24, marginBottom: 24 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', color: COLORS.textMain, marginBottom: 4 },
   sectionSubtitle: { fontSize: 13, color: COLORS.textMuted, maxWidth: 420 },
   sectionCount: { fontSize: 12, fontWeight: '600', color: COLORS.textMuted },
-
-  // --- Grid de Mesas ---
   tablesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginBottom: 24 },
-  tableCard: {
-    width: isWide ? '23%' : '47%',
-    backgroundColor: COLORS.background,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    padding: 16,
-  },
+  tableCard: { width: isWide ? '23%' : '47%', backgroundColor: COLORS.background, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 16 },
   tableDot: { width: 10, height: 10, borderRadius: 5, marginBottom: 12 },
   tableNumber: { fontSize: 16, fontWeight: 'bold', color: COLORS.textMain, marginBottom: 4 },
   tableStatus: { fontSize: 13, color: COLORS.textMuted },
-  tableTotal: { fontSize: 13, fontWeight: '700', color: COLORS.textMain, marginTop: 6 },
-
   legendRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 16 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontSize: 12, color: COLORS.textMuted, fontWeight: '500' },
-
-  // --- Pedidos ---
-  newOrderButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: COLORS.primary,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-  },
+  newOrderButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: COLORS.primary, paddingVertical: 12, borderRadius: 8, marginBottom: 20 },
   newOrderButtonText: { color: COLORS.white, fontSize: 14, fontWeight: 'bold' },
-  emptyState: {
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    paddingVertical: 28,
-    alignItems: 'center',
-  },
+  emptyState: { borderWidth: 1, borderStyle: 'dashed', borderColor: COLORS.border, borderRadius: 12, paddingVertical: 28, alignItems: 'center' },
   emptyStateText: { fontSize: 13, color: COLORS.textMuted },
   ordersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-  orderCard: {
-    width: isWide ? '48%' : '100%',
-    backgroundColor: COLORS.grayCardBg,
-    borderRadius: 12,
-    padding: 20,
-  },
+  orderCard: { width: isWide ? '48%' : '100%', backgroundColor: COLORS.grayCardBg, borderRadius: 12, padding: 20 },
   orderHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   orderId: { fontSize: 14, fontWeight: 'bold', color: COLORS.textMain },
   orderTypeBadge: { backgroundColor: COLORS.grayLight, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
   orderTypeText: { fontSize: 11, fontWeight: 'bold', color: COLORS.textMain },
   orderTypeDelivery: { backgroundColor: '#F57F17' },
   orderTypeTextDelivery: { color: COLORS.white },
-
   orderTable: { fontSize: 16, fontWeight: 'bold', color: COLORS.textMain, marginBottom: 4 },
   orderItems: { fontSize: 13, color: COLORS.textMuted, marginBottom: 8 },
   orderMeta: { fontSize: 12, fontWeight: '600', color: COLORS.textMuted, marginBottom: 20 },
-
-  orderFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  orderFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   orderStatusBadge: { backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
   orderStatusText: { fontSize: 12, fontWeight: '600', color: COLORS.textMuted },
   orderStatusReady: { backgroundColor: '#E8F5E9', borderColor: '#A5D6A7' },
   orderStatusReadyText: { color: COLORS.statusOcupada, fontWeight: '800' },
+  orderStatusWaiting: { backgroundColor: '#FFF3E0', borderColor: '#FFCC80' },
+  orderStatusWaitingText: { color: '#E65100', fontWeight: '800' },
+  orderCardWaiting: { borderWidth: 2, borderColor: COLORS.primary },
+  orderActions: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  sendAllButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1, borderColor: COLORS.primary, paddingVertical: 12, borderRadius: 8, marginBottom: 20 },
+  sendAllButtonText: { color: COLORS.primary, fontSize: 14, fontWeight: 'bold' },
   actionButton: { backgroundColor: COLORS.primary, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 6 },
   actionButtonText: { color: COLORS.white, fontSize: 13, fontWeight: 'bold' },
   linkButton: { paddingVertical: 10, paddingHorizontal: 8 },
   linkButtonText: { fontSize: 13, fontWeight: '600', color: COLORS.textMuted },
-
-  // --- Modal de novo pedido ---
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 20 },
-  modalCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 22,
-    width: '100%',
-    maxWidth: 520,
-    maxHeight: '90%',
-    alignSelf: 'center',
-  },
+  modalCard: { backgroundColor: COLORS.white, borderRadius: 20, padding: 22, width: '100%', maxWidth: 520, maxHeight: '90%', alignSelf: 'center' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
   modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.textMain },
   typeRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  typeOption: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
+  typeOption: { flex: 1, borderWidth: 1, borderColor: COLORS.border, borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
   typeOptionActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
   typeOptionText: { fontSize: 13, fontWeight: '600', color: COLORS.textMuted },
   typeOptionTextActive: { color: COLORS.white },
   modalLabel: { fontSize: 12, fontWeight: '700', color: COLORS.textMain, marginBottom: 6, marginTop: 12 },
   modalInput: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 8, padding: 12, color: COLORS.textMain, fontSize: 15 },
   productList: { maxHeight: 220, marginTop: 4 },
-  productRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.grayLight,
-    gap: 12,
-  },
+  productRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.grayLight, gap: 12 },
   productName: { fontSize: 14, fontWeight: '600', color: COLORS.textMain },
   productPrice: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  qtyButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  qtyButton: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, justifyContent: 'center', alignItems: 'center' },
   qtyButtonDisabled: { opacity: 0.5 },
   qtyValue: { fontSize: 15, fontWeight: '700', color: COLORS.textMain, minWidth: 18, textAlign: 'center' },
-  modalFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 20,
-    gap: 12,
-  },
+  modalFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, gap: 12 },
   modalTotal: { fontSize: 16, fontWeight: '800', color: COLORS.textMain },
   modalSave: { backgroundColor: COLORS.primary, paddingVertical: 12, paddingHorizontal: 22, borderRadius: 8 },
   modalSaveText: { color: COLORS.white, fontWeight: '800' },

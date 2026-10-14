@@ -32,7 +32,7 @@ import {
 } from 'lucide-react-native';
 
 import { RootStackParamList } from '../../App';
-import { useAuth } from '../controller/AuthController';
+import { useAuth, EmailConfirmationRequired } from '../controller/AuthController';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'registerView'>;
 
@@ -104,6 +104,11 @@ export default function RegisterScreen({ navigation }: Props) {
       navigation.replace('homeView');
       Alert.alert('Conta criada!', 'Bem-vindo(a) ao Fogo & Fumaça.');
     } catch (error: any) {
+      if (error instanceof EmailConfirmationRequired) {
+        navigation.replace('loginView');
+        Alert.alert('Confirme seu e-mail', error.message);
+        return;
+      }
       Alert.alert('Não foi possível cadastrar', error?.message || 'Tente novamente.');
     } finally {
       setSubmitting(false);

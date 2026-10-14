@@ -39,7 +39,7 @@ export const reloadCalls = async () => {
   commit(
     (data || []).map((row: any) => ({
       id: row.id,
-      table: String(row.tables?.number ?? ''),
+      table: row.tables?.number != null ? String(row.tables.number).padStart(2, '0') : '',
       reason: row.reason,
       createdAt: Date.parse(row.created_at),
       resolvedAt: row.resolved_at ? Date.parse(row.resolved_at) : null,

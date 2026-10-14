@@ -2,10 +2,20 @@ import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
-const url = process.env.EXPO_PUBLIC_SUPABASE_URL as string;
-const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string;
+const url = process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined;
+const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined;
 
-export const supabase = createClient(url, anonKey, {
+/** false quando as variáveis EXPO_PUBLIC_SUPABASE_* não foram configuradas (ex.: na Vercel). */
+export const supabaseConfigured = !!url && !!anonKey;
+if (!supabaseConfigured) {
+  console.error(
+    '[Supabase] Defina EXPO_PUBLIC_SUPABASE_URL e EXPO_PUBLIC_SUPABASE_ANON_KEY (Vercel > Settings > Environment Variables) e faça um novo deploy.',
+  );
+}
+
+// Sem as variáveis o createClient lançaria erro e a tela ficaria em branco;
+// com valores provisórios o app abre e as chamadas ao banco apenas falham.
+export const supabase = createClient(url || 'https://placeholder.supabase.co', anonKey || 'placeholder-anon-key', {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,

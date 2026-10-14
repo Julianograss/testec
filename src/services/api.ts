@@ -270,3 +270,76 @@ export const settingsApi = {
     return true;
   },
 };
+
+/* ==========================================
+   CÓDIGOS E IMAGEM DO QR DAS MESAS
+   Só a equipe lê; só o admin altera. O cliente entra pelo RPC join_table.
+========================================== */
+export type TableQrInfo = { code: string; imagePath: string | null };
+
+const QR_BUCKET = 'table-qr';
+const QR_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp' };
+
+export const tableCodesApi = {
+  /** Indexado pelo número da mesa com 2 dígitos ("05"). */
+  async list(): Promise<Record<string, TableQrInfo>> {
+    const { data, error } = await supabase.rpc('get_table_codes');
+    if (error) throw asError(error, 'carregar os códigos das mesas');
+    const map: Record<string, TableQrInfo> = {};
+    (data || []).forEach((row: any) => {
+      map[String(row.table_number).padStart(2, '0')] = { code: row.code, imagePath: row.qr_image_path || null };
+    });
+    return map;
+  },
+
+  /** Gera um novo código (invalida QR e imagem antigos) e apaga o arquivo da imagem anterior. */
+  async rotate(tableNumber: string, oldImagePath?: string | null): Promise<string> {
+    const { data, error } = await supabase.rpc('rotate_table_code', { p_number: Number(tableNumber) });
+    if (error) throw asError(error, 'gerar um novo código');
+    if (oldImagePath) await supabase.storage.from(QR_BUCKET).remove([oldImagePath]);
+    return String(data);
+  },
+
+  /** Link temporário (1 h) para exibir a imagem privada. */
+  async imageUrl(path: string): Promise<string | null> {
+    const { data, error } = await supabase.storage.from(QR_BUCKET).createSignedUrl(path, 3600);
+    return error ? null : data?.signedUrl ?? null;
+  },
+
+  /** Envia a imagem do QR (nova ou para trocar a atual). Devolve o caminho salvo. */
+  async uploadImage(tableNumber: string, uri: string): Promise<string> {
+    let buffer: ArrayBuffer;
+    let contentType = '';
+    try {
+      const response = await fetch(uri);
+      contentType = (response.headers.get('content-type') || '').split(';')[0];
+      buffer = await response.arrayBuffer();
+    } catch {
+      throw new ApiError('Não foi possível ler a imagem escolhida.');
+    }
+    if (buffer.byteLength > QR_IMAGE_MAX_BYTES) throw new ApiError('A imagem é grande demais. Use um arquivo de até 5 MB.');
+    const extFromUri = (uri.split('?')[0].match(/\.(png|jpe?g|webp)$/i)?.[1] || '').toLowerCase().replace('jpeg', 'jpg');
+    const ext = IMAGE_EXT[contentType] || extFromUri || 'png';
+    if (!contentType.startsWith('image/')) contentType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+
+    const path = `mesa-${tableNumber}-${Date.now()}.${ext}`;
+    const { error: uploadError } = await supabase.storage.from(QR_BUCKET).upload(path, buffer, { contentType });
+    if (uploadError) throw asError(uploadError, 'enviar a imagem do QR Code');
+
+    const { data: previous, error } = await supabase.rpc('set_table_qr_image', { p_number: Number(tableNumber), p_path: path });
+    if (error) {
+      await supabase.storage.from(QR_BUCKET).remove([path]); // não deixa arquivo órfão
+      throw asError(error, 'salvar a imagem do QR Code');
+    }
+    if (previous) await supabase.storage.from(QR_BUCKET).remove([previous as string]);
+    return path;
+  },
+
+  /** Exclui a imagem (volta a valer o QR gerado pelo sistema). */
+  async removeImage(tableNumber: string): Promise<void> {
+    const { data: previous, error } = await supabase.rpc('set_table_qr_image', { p_number: Number(tableNumber), p_path: null });
+    if (error) throw asError(error, 'excluir a imagem do QR Code');
+    if (previous) await supabase.storage.from(QR_BUCKET).remove([previous as string]);
+  },
+};

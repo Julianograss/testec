@@ -39,7 +39,7 @@ type Props = {
 
 export default function KitchenDisplayScreen({ navigation }: Props) {
   const { user, logout } = useAuth();
-  const { queue, preparing, completed, advanceOrder, revertOrder, deliverOrder } = useKitchenOrders();
+  const { queue, preparing, completed, advanceOrder, revertOrder } = useKitchenOrders();
 
   // Relógio da tela: mantém os cronômetros dos cartões atualizados.
   const [now, setNow] = useState<number>(Date.now());
@@ -53,17 +53,6 @@ export default function KitchenDisplayScreen({ navigation }: Props) {
     logout();
     navigation.replace('loginView');
   }, [logout, navigation]);
-
-  const confirmDelivery = useCallback(
-    (order: OrderView) => {
-      const label = order.type === 'Delivery' ? 'saiu para entrega' : 'foi para a mesa';
-      Alert.alert('Confirmar saída', `O pedido #${order.id} ${label}?`, [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', onPress: () => deliverOrder(order.id) },
-      ]);
-    },
-    [deliverOrder],
-  );
 
   /* ==========================================
      CARTÃO DE PEDIDO
@@ -128,11 +117,7 @@ export default function KitchenDisplayScreen({ navigation }: Props) {
             <View style={styles.readyBadge}>
               <Text style={styles.readyBadgeText}>✓ Pronto para retirada</Text>
             </View>
-            <TouchableOpacity style={styles.secondaryButton} onPress={() => confirmDelivery(order)}>
-              <Text style={styles.secondaryButtonText}>
-                {order.type === 'Delivery' ? 'Saiu para entrega' : 'Entregue na mesa'}
-              </Text>
-            </TouchableOpacity>
+            <Text style={styles.readyHint}>Aguardando o atendimento chamar a retirada.</Text>
             <TouchableOpacity style={styles.linkButton} onPress={() => revertOrder(order.id)}>
               <Text style={styles.linkButtonText}>Voltar para o preparo</Text>
             </TouchableOpacity>
@@ -525,5 +510,11 @@ const styles = StyleSheet.create({
     color: COLORS.btnReadyText,
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  readyHint: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+    marginTop: 6,
   },
 });
