@@ -15,7 +15,7 @@ if (!supabaseConfigured) {
 
 // Sem as variáveis o createClient lançaria erro e a tela ficaria em branco;
 // com valores provisórios o app abre e as chamadas ao banco apenas falham.
-export const supabase = createClient(url || 'https://placeholder.supabase.co', anonKey || 'placeholder-anon-key', {
+export const supabase = createClient(url || 'https://oymcywaglefoxrzifswg.supabase.co', anonKey || 'sb_publishable_EASXo9K2ItfBB-iqTtxe0g_TLUrPmSy', {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,
