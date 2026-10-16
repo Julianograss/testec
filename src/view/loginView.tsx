@@ -210,16 +210,7 @@ export default function LoginScreen({ navigation }: any) {
                 </TouchableOpacity>
               </View>
 
-            {/* Contas de demonstração (dado fixo, só para facilitar o teste) */}
-            <View style={styles.demoCard}>
-              <Text style={styles.demoTitle}>Contas de demonstração</Text>
-              <Text style={styles.demoLine}>Cliente — lucas@gmail.com</Text>
-              <Text style={styles.demoLine}>Atendimento — joao@gmail.com</Text>
-              <Text style={styles.demoLine}>Cozinha — augusto@gmail.com</Text>
-              <Text style={styles.demoLine}>Admin — admin@gmail.com</Text>
-              <Text style={styles.demoLine}>Senha para todas: 123456</Text>
-            </View>
-
+           
             {/* Rodapé de Privacidade */}
             <View style={styles.privacyCard}>
               <View style={styles.privacyIconBg}>
